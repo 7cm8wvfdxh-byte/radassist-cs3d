@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, type RefObject } from 'react';
+import type { AnnotationData } from './AnnotationOverlay';
 
 interface SeriesInfo {
   seriesUID: string;
@@ -16,6 +17,8 @@ interface AIPanelProps {
   activePhoto: { url: string; name: string; file: File } | null;
   activeVideo: { url: string; name: string; file: File } | null;
   videoRef: RefObject<HTMLVideoElement | null>;
+  annotationData: AnnotationData | null;
+  onAnnotationConsumed: () => void;
 }
 
 interface ChatMessage {
@@ -30,7 +33,7 @@ const AI_MODELS = [
   { id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'anthropic' },
 ];
 
-export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto, activeVideo, videoRef }: AIPanelProps) {
+export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto, activeVideo, videoRef, annotationData, onAnnotationConsumed }: AIPanelProps) {
   const [model, setModel] = useState('gemini-2.5-flash');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -53,6 +56,53 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
   useEffect(() => {
     // Keys stored in memory only for this session
   }, []);
+
+  // Auto-trigger analysis when annotation data arrives
+  useEffect(() => {
+    if (!annotationData) return;
+
+    const runAnnotationAnalysis = async () => {
+      setAnalyzing(true);
+
+      const imageToSend = annotationData.hasDrawing
+        ? (annotationData.drawingDataUrl || annotationData.fullImageWithAnnotation)
+        : annotationData.fullImageWithAnnotation;
+
+      const regionInfo = annotationData.hasDrawing
+        ? `İşaretlenmiş bölge (${annotationData.organLabel})`
+        : annotationData.organLabel;
+
+      let prompt: string;
+      if (annotationData.organ === 'general') {
+        prompt = 'Bu tıbbi görüntüyü genel olarak analiz et. Sistematik bir radyoloji raporu hazırla.';
+      } else if (annotationData.hasDrawing) {
+        prompt = `Bu görüntüde ${annotationData.organLabel} bölgesinde işaretlenmiş alanı analiz et. İşaretli bölgedeki bulguları detaylı değerlendir. Patoloji varsa tanımla, yoksa normal olarak raporla.`;
+      } else {
+        prompt = `Bu görüntüde ${annotationData.organLabel} bölgesine odaklanarak analiz et. Bu organa/bölgeye özgü bulguları değerlendir.`;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'user',
+          content: `🎯 Hedefli analiz: ${regionInfo}${annotationData.hasDrawing ? ' (çizimli)' : ''}`,
+          timestamp: new Date(),
+        },
+      ]);
+
+      const result = await analyzeWithGemini(prompt, imageToSend);
+
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: result, timestamp: new Date() },
+      ]);
+
+      setAnalyzing(false);
+      onAnnotationConsumed();
+    };
+
+    runAnnotationAnalysis();
+  }, [annotationData]);
 
   const captureViewport = async (): Promise<string | null> => {
     try {

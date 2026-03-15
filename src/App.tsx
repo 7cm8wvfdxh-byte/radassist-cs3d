@@ -11,6 +11,8 @@ import {
 import ToolRail from './components/ToolRail';
 import SeriesSidebar from './components/SeriesSidebar';
 import ServerPanel from './components/ServerPanel';
+import AnnotationOverlay from './components/AnnotationOverlay';
+import type { AnnotationData } from './components/AnnotationOverlay';
 import AIPanel from './components/AIPanel';
 
 interface SeriesInfo {
@@ -48,6 +50,8 @@ export default function App() {
   const [activePhoto, setActivePhoto] = useState(0);
   const [videos, setVideos] = useState<{ url: string; name: string; file: File }[]>([]);
   const [activeVideo, setActiveVideo] = useState(0);
+  const [annotationOpen, setAnnotationOpen] = useState(false);
+  const [lastAnnotation, setLastAnnotation] = useState<AnnotationData | null>(null);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderingEngineRef = useRef<any>(null);
@@ -391,6 +395,45 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Capture current viewport/photo/video frame as base64 for annotation
+  const captureBase = useCallback(async (): Promise<string | null> => {
+    try {
+      if (viewMode === 'video' && videoRef.current) {
+        const video = videoRef.current;
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(video, 0, 0);
+        return canvas.toDataURL('image/png').split(',')[1];
+      }
+      if (viewMode === 'photo' && photos[activePhoto]?.file) {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            resolve(result.split(',')[1]);
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(photos[activePhoto].file);
+        });
+      }
+      // DICOM canvas
+      const canvas = document.querySelector('.viewport-element canvas') as HTMLCanvasElement;
+      if (!canvas) return null;
+      return canvas.toDataURL('image/png').split(',')[1];
+    } catch {
+      return null;
+    }
+  }, [viewMode, photos, activePhoto]);
+
+  // Handle annotation analysis result
+  const handleAnnotationAnalyze = (data: AnnotationData) => {
+    setLastAnnotation(data);
+    setAnnotationOpen(false);
   };
 
   const layoutClass = [
@@ -797,6 +840,32 @@ export default function App() {
               <div className="spinner" />
             </div>
           )}
+
+          {/* Annotate button */}
+          {hasImages && !annotationOpen && (
+            <button
+              onClick={() => setAnnotationOpen(true)}
+              style={{
+                position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+                padding: '6px 16px', borderRadius: 8, border: '1px solid var(--border-bright)',
+                background: 'rgba(0,0,0,0.7)', color: 'var(--text-primary)',
+                fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                fontFamily: "'Plus Jakarta Sans', sans-serif",
+                display: 'flex', alignItems: 'center', gap: 6,
+                zIndex: 8, backdropFilter: 'blur(8px)',
+              }}
+            >
+              ✏️ Bölge Seç & İşaretle
+            </button>
+          )}
+
+          {/* Annotation Overlay */}
+          <AnnotationOverlay
+            visible={annotationOpen}
+            onAnalyze={handleAnnotationAnalyze}
+            onClose={() => setAnnotationOpen(false)}
+            captureBase={captureBase}
+          />
         </div>
 
         {/* Status Bar */}
@@ -842,6 +911,8 @@ export default function App() {
           activePhoto={photos[activePhoto] || null}
           activeVideo={videos[activeVideo] || null}
           videoRef={videoRef}
+          annotationData={lastAnnotation}
+          onAnnotationConsumed={() => setLastAnnotation(null)}
         />
       )}
     </div>
