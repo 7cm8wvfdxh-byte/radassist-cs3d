@@ -30,8 +30,9 @@ export async function initCornerstone(): Promise<void> {
     maxWebWorkers: navigator.hardwareConcurrency || 4,
   });
 
-  // Register wadouri scheme (no args in v4)
+  // Register wadouri scheme (local files) and wadors scheme (DICOMweb)
   cornerstoneDICOMImageLoader.wadouri.register();
+  cornerstoneDICOMImageLoader.wadors.register();
 
   // Init cornerstone core
   await cornerstone.init();

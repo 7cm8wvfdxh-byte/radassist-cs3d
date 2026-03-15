@@ -36,7 +36,7 @@ export default function SeriesSidebar({
   onSeriesChange,
 }: SeriesSidebarProps) {
   return (
-    <div className="series-sidebar">
+    <>
       {/* Patient info */}
       {patient && (
         <div className="patient-info">
@@ -74,6 +74,6 @@ export default function SeriesSidebar({
           ))
         )}
       </div>
-    </div>
+    </>
   );
 }

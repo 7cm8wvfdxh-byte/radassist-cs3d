@@ -10,6 +10,7 @@ import {
 } from './lib/initCornerstone';
 import ToolRail from './components/ToolRail';
 import SeriesSidebar from './components/SeriesSidebar';
+import ServerPanel from './components/ServerPanel';
 import AIPanel from './components/AIPanel';
 
 interface SeriesInfo {
@@ -41,6 +42,7 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [aiOpen, setAiOpen] = useState(true);
+  const [sidebarMode, setSidebarMode] = useState<'local' | 'server'>('local');
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderingEngineRef = useRef<any>(null);
@@ -258,6 +260,53 @@ export default function App() {
     }
   };
 
+  // WADO-RS: Load series from remote DICOMweb server
+  const handleServerLoadSeries = async (
+    imageIds: string[],
+    meta: {
+      patientName: string;
+      patientId: string;
+      studyDate: string;
+      studyDescription: string;
+      seriesDescription: string;
+      modality: string;
+      seriesUID: string;
+      instanceCount: number;
+    }
+  ) => {
+    if (!csReady || !viewportRef.current) return;
+    setLoading(true);
+
+    try {
+      setPatient({
+        name: meta.patientName || 'Anonim',
+        id: meta.patientId || '',
+        studyDate: meta.studyDate || '',
+        studyDescription: meta.studyDescription || '',
+      });
+
+      const newSeries: SeriesInfo = {
+        seriesUID: meta.seriesUID,
+        description: meta.seriesDescription || 'Uzak Seri',
+        modality: meta.modality || 'OT',
+        imageIds,
+        instanceCount: meta.instanceCount || imageIds.length,
+      };
+
+      setSeries([newSeries]);
+      setActiveSeries(0);
+      setTotalImages(imageIds.length);
+      setImageIndex(0);
+
+      await displaySeries(imageIds);
+    } catch (err) {
+      console.error('Server load error:', err);
+      alert('Sunucu yükleme hatası: ' + (err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const layoutClass = [
     'app-layout',
     !sidebarOpen && 'sidebar-collapsed',
@@ -291,14 +340,52 @@ export default function App() {
         hasImages={hasImages}
       />
 
-      {/* Series Sidebar */}
+      {/* Sidebar: Local files or Server connection */}
       {sidebarOpen && (
-        <SeriesSidebar
-          patient={patient}
-          series={series}
-          activeSeries={activeSeries}
-          onSeriesChange={handleSeriesChange}
-        />
+        <div className="series-sidebar">
+          {/* Mode tabs */}
+          <div style={{
+            display: 'flex', borderBottom: '1px solid var(--border)',
+          }}>
+            <button
+              onClick={() => setSidebarMode('local')}
+              style={{
+                flex: 1, padding: '10px 0', border: 'none', cursor: 'pointer',
+                background: sidebarMode === 'local' ? 'var(--bg-tertiary)' : 'transparent',
+                color: sidebarMode === 'local' ? 'var(--accent)' : 'var(--text-muted)',
+                fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+                fontFamily: "'Plus Jakarta Sans', sans-serif",
+                borderBottom: sidebarMode === 'local' ? '2px solid var(--accent)' : '2px solid transparent',
+              }}
+            >
+              Lokal
+            </button>
+            <button
+              onClick={() => setSidebarMode('server')}
+              style={{
+                flex: 1, padding: '10px 0', border: 'none', cursor: 'pointer',
+                background: sidebarMode === 'server' ? 'var(--bg-tertiary)' : 'transparent',
+                color: sidebarMode === 'server' ? 'var(--cyan)' : 'var(--text-muted)',
+                fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+                fontFamily: "'Plus Jakarta Sans', sans-serif",
+                borderBottom: sidebarMode === 'server' ? '2px solid var(--cyan)' : '2px solid transparent',
+              }}
+            >
+              Sunucu
+            </button>
+          </div>
+
+          {sidebarMode === 'local' ? (
+            <SeriesSidebar
+              patient={patient}
+              series={series}
+              activeSeries={activeSeries}
+              onSeriesChange={handleSeriesChange}
+            />
+          ) : (
+            <ServerPanel onLoadSeries={handleServerLoadSeries} />
+          )}
+        </div>
       )}
 
       {/* Viewport */}
