@@ -12,6 +12,8 @@ interface AIPanelProps {
   hasImages: boolean;
   activeSeries: SeriesInfo | null;
   imageIndex: number;
+  viewMode: 'dicom' | 'photo';
+  activePhoto: { url: string; name: string; file: File } | null;
 }
 
 interface ChatMessage {
@@ -26,7 +28,7 @@ const AI_MODELS = [
   { id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'anthropic' },
 ];
 
-export default function AIPanel({ hasImages, activeSeries, imageIndex }: AIPanelProps) {
+export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto }: AIPanelProps) {
   const [model, setModel] = useState('gemini-2.5-flash');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -50,8 +52,21 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex }: AIPanel
     // Keys stored in memory only for this session
   }, []);
 
-  const captureViewport = (): string | null => {
+  const captureViewport = async (): Promise<string | null> => {
     try {
+      // If viewing a photo, convert it to base64
+      if (viewMode === 'photo' && activePhoto?.file) {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            resolve(result.split(',')[1]);
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(activePhoto.file);
+        });
+      }
+      // DICOM viewport canvas capture
       const canvas = document.querySelector('.viewport-element canvas') as HTMLCanvasElement;
       if (!canvas) return null;
       return canvas.toDataURL('image/png').split(',')[1];
@@ -92,12 +107,15 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex }: AIPanel
             systemInstruction: {
               parts: [
                 {
-                  text: `Sen deneyimli bir radyolog asistanısın. Türkçe yanıt ver. DICOM görüntülerini analiz ederken:
+                  text: `Sen deneyimli bir radyolog asistanısın. Türkçe yanıt ver. 
+Görüntü tıbbi bir DICOM görüntüsü olabileceği gibi, ekran görüntüsü, telefon fotoğrafı veya başka bir görüntü de olabilir.
+Tıbbi görüntüler için:
 1. Görüntü kalitesi ve teknik değerlendirme
 2. Anatomi ve normal yapılar
 3. Patolojik bulgular (varsa)
 4. Öneriler
-formatında sistematik rapor hazırla. Klinik korelasyon öner.`,
+formatında sistematik rapor hazırla. Klinik korelasyon öner.
+Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`,
                 },
               ],
             },
@@ -122,20 +140,25 @@ formatında sistematik rapor hazırla. Klinik korelasyon öner.`,
     if (!hasImages) return;
     setAnalyzing(true);
 
-    const imageBase64 = captureViewport();
-    const seriesInfo = activeSeries
-      ? `Modalite: ${activeSeries.modality}, Seri: ${activeSeries.description}, Kesit: ${imageIndex + 1}/${activeSeries.instanceCount}`
-      : '';
+    const imageBase64 = await captureViewport();
 
-    const prompt = `Bu radyolojik görüntüyü analiz et. ${seriesInfo}. Sistematik bir radyoloji raporu hazırla.`;
+    let prompt: string;
+    let userMessage: string;
+
+    if (viewMode === 'photo' && activePhoto) {
+      prompt = `Bu görüntüyü analiz et. Dosya adı: ${activePhoto.name}. Tıbbi bir görüntüyse radyoloji raporu hazırla, değilse içeriği açıkla.`;
+      userMessage = `🔍 Fotoğraf analizi başlatıldı (${activePhoto.name})`;
+    } else {
+      const seriesInfo = activeSeries
+        ? `Modalite: ${activeSeries.modality}, Seri: ${activeSeries.description}, Kesit: ${imageIndex + 1}/${activeSeries.instanceCount}`
+        : '';
+      prompt = `Bu radyolojik görüntüyü analiz et. ${seriesInfo}. Sistematik bir radyoloji raporu hazırla.`;
+      userMessage = `🔍 Görüntü analizi başlatıldı (${activeSeries?.modality || 'DICOM'} - Kesit ${imageIndex + 1})`;
+    }
 
     setMessages((prev) => [
       ...prev,
-      {
-        role: 'user',
-        content: `🔍 Görüntü analizi başlatıldı (${activeSeries?.modality || 'DICOM'} - Kesit ${imageIndex + 1})`,
-        timestamp: new Date(),
-      },
+      { role: 'user', content: userMessage, timestamp: new Date() },
     ]);
 
     const result = await analyzeWithGemini(prompt, imageBase64);
@@ -160,10 +183,15 @@ formatında sistematik rapor hazırla. Klinik korelasyon öner.`,
 
     setAnalyzing(true);
 
-    const imageBase64 = hasImages ? captureViewport() : null;
-    const context = activeSeries
-      ? `Mevcut görüntü: ${activeSeries.modality} - ${activeSeries.description}, Kesit ${imageIndex + 1}/${activeSeries.instanceCount}`
-      : 'Henüz görüntü yüklenmemiş';
+    const imageBase64 = hasImages ? await captureViewport() : null;
+    let context: string;
+    if (viewMode === 'photo' && activePhoto) {
+      context = `Mevcut görüntü: Fotoğraf - ${activePhoto.name}`;
+    } else if (activeSeries) {
+      context = `Mevcut görüntü: ${activeSeries.modality} - ${activeSeries.description}, Kesit ${imageIndex + 1}/${activeSeries.instanceCount}`;
+    } else {
+      context = 'Henüz görüntü yüklenmemiş';
+    }
 
     const prompt = `${context}\n\nKullanıcı sorusu: ${userMsg}`;
     const result = await analyzeWithGemini(prompt, imageBase64);

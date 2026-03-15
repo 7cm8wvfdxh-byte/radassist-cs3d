@@ -43,6 +43,9 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [aiOpen, setAiOpen] = useState(true);
   const [sidebarMode, setSidebarMode] = useState<'local' | 'server'>('local');
+  const [viewMode, setViewMode] = useState<'dicom' | 'photo'>('dicom');
+  const [photos, setPhotos] = useState<{ url: string; name: string; file: File }[]>([]);
+  const [activePhoto, setActivePhoto] = useState(0);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderingEngineRef = useRef<any>(null);
@@ -82,20 +85,59 @@ export default function App() {
       setLoading(true);
 
       try {
-        const dcmFiles = Array.from(files).filter(
+        const allFiles = Array.from(files);
+
+        // Separate DICOM files from regular images
+        const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'];
+        const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff'];
+
+        const regularImages = allFiles.filter(
           (f) =>
-            f.name.endsWith('.dcm') ||
-            f.name.endsWith('.DCM') ||
-            !f.name.includes('.') ||
-            f.type === 'application/dicom'
+            imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext)) ||
+            imageTypes.includes(f.type)
         );
 
+        const dcmFiles = allFiles.filter(
+          (f) =>
+            !regularImages.includes(f) &&
+            (f.name.endsWith('.dcm') ||
+              f.name.endsWith('.DCM') ||
+              !f.name.includes('.') ||
+              f.type === 'application/dicom')
+        );
+
+        // Handle regular images (screenshots, phone photos)
+        if (regularImages.length > 0) {
+          const photoList = regularImages.map((f) => ({
+            url: URL.createObjectURL(f),
+            name: f.name,
+            file: f,
+          }));
+          setPhotos((prev) => [...prev, ...photoList]);
+          setActivePhoto(photos.length); // Jump to first new photo
+          setViewMode('photo');
+          setLoading(false);
+
+          // Set patient info for photos
+          if (!patient) {
+            setPatient({
+              name: 'Görüntü Yüklendi',
+              id: '',
+              studyDate: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+              studyDescription: `${regularImages.length} fotoğraf`,
+            });
+          }
+          return;
+        }
+
+        // Handle DICOM files
         if (dcmFiles.length === 0) {
-          alert('DICOM dosyası bulunamadı (.dcm)');
+          alert('Desteklenen dosya bulunamadı (.dcm, .jpg, .png vb.)');
           setLoading(false);
           return;
         }
 
+        setViewMode('dicom');
         const imageIds = await loadDicomFiles(dcmFiles);
 
         // Force load first image to populate metadata
@@ -315,7 +357,9 @@ export default function App() {
     .filter(Boolean)
     .join(' ');
 
-  const hasImages = series.length > 0;
+  const hasImages = series.length > 0 || photos.length > 0;
+  const hasDicom = series.length > 0;
+  const hasPhotos = photos.length > 0;
 
   return (
     <div className={layoutClass}>
@@ -324,7 +368,7 @@ export default function App() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".dcm,.DCM,application/dicom"
+        accept=".dcm,.DCM,application/dicom,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff,.tif,image/*"
         style={{ display: 'none' }}
         onChange={handleFileInput}
         {...({ webkitdirectory: '', directory: '' } as any)}
@@ -404,8 +448,8 @@ export default function App() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
                   </svg>
                 </div>
-                <h3>DICOM Dosyalarını Yükle</h3>
-                <p>Dosyaları sürükleyip bırakın veya klasör seçin</p>
+                <h3>Görüntü Yükle</h3>
+                <p>DICOM, ekran görüntüsü veya fotoğraf sürükleyip bırakın</p>
                 <button className="browse-btn" onClick={handleBrowse}>
                   Dosya / Klasör Seç
                 </button>
@@ -413,14 +457,120 @@ export default function App() {
             </div>
           )}
 
+          {/* DICOM Viewport */}
           <div
             ref={viewportRef}
             className="viewport-element"
-            style={{ visibility: hasImages ? 'visible' : 'hidden' }}
+            style={{ visibility: viewMode === 'dicom' && hasDicom ? 'visible' : 'hidden' }}
           />
 
+          {/* Photo Viewer */}
+          {viewMode === 'photo' && hasPhotos && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: '#000',
+            }}>
+              <img
+                src={photos[activePhoto]?.url}
+                alt={photos[activePhoto]?.name}
+                style={{
+                  maxWidth: '100%', maxHeight: '100%',
+                  objectFit: 'contain',
+                }}
+              />
+              {/* Photo navigation */}
+              {photos.length > 1 && (
+                <>
+                  <button
+                    onClick={() => setActivePhoto(Math.max(0, activePhoto - 1))}
+                    disabled={activePhoto === 0}
+                    style={{
+                      position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+                      width: 36, height: 36, borderRadius: '50%',
+                      border: 'none', background: 'rgba(255,255,255,0.15)',
+                      color: 'white', cursor: 'pointer', fontSize: 18,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      opacity: activePhoto === 0 ? 0.3 : 1,
+                    }}
+                  >
+                    ‹
+                  </button>
+                  <button
+                    onClick={() => setActivePhoto(Math.min(photos.length - 1, activePhoto + 1))}
+                    disabled={activePhoto === photos.length - 1}
+                    style={{
+                      position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                      width: 36, height: 36, borderRadius: '50%',
+                      border: 'none', background: 'rgba(255,255,255,0.15)',
+                      color: 'white', cursor: 'pointer', fontSize: 18,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      opacity: activePhoto === photos.length - 1 ? 0.3 : 1,
+                    }}
+                  >
+                    ›
+                  </button>
+                </>
+              )}
+              {/* Delete photo button */}
+              <button
+                onClick={() => {
+                  const newPhotos = photos.filter((_, i) => i !== activePhoto);
+                  setPhotos(newPhotos);
+                  if (newPhotos.length === 0) {
+                    setViewMode('dicom');
+                  } else {
+                    setActivePhoto(Math.min(activePhoto, newPhotos.length - 1));
+                  }
+                }}
+                style={{
+                  position: 'absolute', top: 12, right: 12,
+                  width: 32, height: 32, borderRadius: 8,
+                  border: 'none', background: 'rgba(239,68,68,0.8)',
+                  color: 'white', cursor: 'pointer', fontSize: 14,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                title="Fotoğrafı kaldır"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Mode switcher when both DICOM and photos exist */}
+          {hasDicom && hasPhotos && (
+            <div style={{
+              position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
+              display: 'flex', gap: 2, background: 'rgba(0,0,0,0.6)',
+              borderRadius: 8, padding: 3, zIndex: 10,
+            }}>
+              <button
+                onClick={() => setViewMode('dicom')}
+                style={{
+                  padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                  fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                  background: viewMode === 'dicom' ? 'var(--accent)' : 'transparent',
+                  color: viewMode === 'dicom' ? 'white' : 'var(--text-muted)',
+                }}
+              >
+                DICOM
+              </button>
+              <button
+                onClick={() => setViewMode('photo')}
+                style={{
+                  padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                  fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                  background: viewMode === 'photo' ? 'var(--cyan)' : 'transparent',
+                  color: viewMode === 'photo' ? 'white' : 'var(--text-muted)',
+                }}
+              >
+                Fotoğraf ({photos.length})
+              </button>
+            </div>
+          )}
+
           {/* Viewport overlays */}
-          {hasImages && (
+          {viewMode === 'dicom' && hasDicom && (
             <>
               <div className="viewport-overlay top-left">
                 <div>{patient?.name}</div>
@@ -443,6 +593,20 @@ export default function App() {
             </>
           )}
 
+          {/* Photo overlay info */}
+          {viewMode === 'photo' && hasPhotos && (
+            <>
+              <div className="viewport-overlay top-left">
+                <div>{photos[activePhoto]?.name}</div>
+              </div>
+              <div className="viewport-overlay bottom-right">
+                <div>
+                  {activePhoto + 1} / {photos.length}
+                </div>
+              </div>
+            </>
+          )}
+
           {loading && (
             <div className="loading-overlay">
               <div className="spinner" />
@@ -456,7 +620,7 @@ export default function App() {
             <div className={`status-dot ${csReady ? '' : 'warning'}`} />
             <span>{csReady ? 'Cornerstone3D Hazır' : 'Başlatılıyor...'}</span>
           </div>
-          {hasImages && (
+          {hasDicom && (
             <>
               <div className="status-item">
                 <span>{series.length} seri</span>
@@ -465,6 +629,11 @@ export default function App() {
                 <span>{totalImages} kesit</span>
               </div>
             </>
+          )}
+          {hasPhotos && (
+            <div className="status-item">
+              <span>{photos.length} fotoğraf</span>
+            </div>
           )}
           <div style={{ flex: 1 }} />
           <div className="status-item">
@@ -479,6 +648,8 @@ export default function App() {
           hasImages={hasImages}
           activeSeries={series[activeSeries] || null}
           imageIndex={imageIndex}
+          viewMode={viewMode}
+          activePhoto={photos[activePhoto] || null}
         />
       )}
     </div>
