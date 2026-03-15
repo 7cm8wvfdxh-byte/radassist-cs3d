@@ -6,8 +6,6 @@ import {
   loadDicomFiles,
   parseDicomMetadata,
   cornerstone,
-  cornerstoneTools,
-  TOOL_GROUP_ID,
   RENDERING_ENGINE_ID,
 } from './lib/initCornerstone';
 import ToolRail from './components/ToolRail';
@@ -200,8 +198,7 @@ export default function App() {
       try {
         const cam = viewport.getCamera();
         if (cam?.parallelScale) {
-          const initialScale = viewport.getCamera()?.parallelScale || 1;
-          setZoom(Number((1).toFixed(2)));
+          setZoom(1);
         }
       } catch {}
     }) as EventListener);

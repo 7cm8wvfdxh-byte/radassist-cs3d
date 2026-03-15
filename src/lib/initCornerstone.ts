@@ -1,7 +1,6 @@
 import * as cornerstone from '@cornerstonejs/core';
 import * as cornerstoneTools from '@cornerstonejs/tools';
 import cornerstoneDICOMImageLoader from '@cornerstonejs/dicom-image-loader';
-import dicomParser from 'dicom-parser';
 
 const {
   PanTool,
@@ -12,7 +11,6 @@ const {
   AngleTool,
   RectangleROITool,
   EllipticalROITool,
-  CrosshairsTool,
   ToolGroupManager,
   Enums: csToolsEnums,
 } = cornerstoneTools;
@@ -31,16 +29,9 @@ export async function initCornerstone(): Promise<void> {
   cornerstoneDICOMImageLoader.init({
     maxWebWorkers: navigator.hardwareConcurrency || 4,
   });
-  cornerstoneDICOMImageLoader.wadouri.register(cornerstone);
 
-  // Configure metadata provider
-  const { calibratedPixelSpacingMetadataProvider } = cornerstone.utilities;
-  cornerstone.metaData.addProvider(
-    cornerstoneDICOMImageLoader.wadouri.metaData.getNumberValue.bind(
-      cornerstoneDICOMImageLoader.wadouri.metaData
-    ),
-    1
-  );
+  // Register wadouri scheme (no args in v4)
+  cornerstoneDICOMImageLoader.wadouri.register();
 
   // Init cornerstone core
   await cornerstone.init();
@@ -61,7 +52,7 @@ export async function initCornerstone(): Promise<void> {
   initialized = true;
 }
 
-export function createToolGroup(): typeof cornerstoneTools.Types.IToolGroup | null {
+export function createToolGroup() {
   const existing = ToolGroupManager.getToolGroup(TOOL_GROUP_ID);
   if (existing) {
     ToolGroupManager.destroyToolGroup(TOOL_GROUP_ID);
@@ -118,32 +109,19 @@ export function setActiveTool(toolName: string): void {
   });
 
   // Set the primary mouse button tool
-  if (toolName === 'WindowLevel') {
-    toolGroup.setToolActive(WindowLevelTool.toolName, {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  } else if (toolName === 'Pan') {
-    toolGroup.setToolActive(PanTool.toolName, {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  } else if (toolName === 'Zoom') {
-    toolGroup.setToolActive(ZoomTool.toolName, {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  } else if (toolName === 'Length') {
-    toolGroup.setToolActive(LengthTool.toolName, {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  } else if (toolName === 'Angle') {
-    toolGroup.setToolActive(AngleTool.toolName, {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  } else if (toolName === 'RectangleROI') {
-    toolGroup.setToolActive(RectangleROITool.toolName, {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  } else if (toolName === 'EllipticalROI') {
-    toolGroup.setToolActive(EllipticalROITool.toolName, {
+  const toolMap: Record<string, string> = {
+    WindowLevel: WindowLevelTool.toolName,
+    Pan: PanTool.toolName,
+    Zoom: ZoomTool.toolName,
+    Length: LengthTool.toolName,
+    Angle: AngleTool.toolName,
+    RectangleROI: RectangleROITool.toolName,
+    EllipticalROI: EllipticalROITool.toolName,
+  };
+
+  const csToolName = toolMap[toolName];
+  if (csToolName) {
+    toolGroup.setToolActive(csToolName, {
       bindings: [{ mouseButton: MouseBindings.Primary }],
     });
   }
