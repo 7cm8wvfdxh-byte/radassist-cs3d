@@ -44,18 +44,21 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
   ]);
   const [inputText, setInputText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [showApiInput, setShowApiInput] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const SYSTEM_PROMPT = `Sen deneyimli bir radyolog asistanısın. Türkçe yanıt ver. 
+Görüntü tıbbi bir DICOM görüntüsü olabileceği gibi, ekran görüntüsü, telefon fotoğrafı veya başka bir görüntü de olabilir.
+Tıbbi görüntüler için:
+1. Görüntü kalitesi ve teknik değerlendirme
+2. Anatomi ve normal yapılar
+3. Patolojik bulgular (varsa)
+4. Öneriler
+formatında sistematik rapor hazırla. Klinik korelasyon öner.
+Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  // Load saved API key
-  useEffect(() => {
-    // Keys stored in memory only for this session
-  }, []);
 
   // Auto-trigger analysis when annotation data arrives
   useEffect(() => {
@@ -139,59 +142,24 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
   };
 
   const analyzeWithGemini = async (prompt: string, imageBase64: string | null) => {
-    if (!apiKey) {
-      setShowApiInput(true);
-      return 'API anahtarı gerekli. Lütfen Gemini API key girin.';
-    }
-
-    const parts: any[] = [];
-    if (imageBase64) {
-      parts.push({
-        inlineData: {
-          mimeType: 'image/png',
-          data: imageBase64,
-        },
-      });
-    }
-    parts.push({ text: prompt });
-
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: {
-              temperature: 0.3,
-              maxOutputTokens: 2048,
-            },
-            systemInstruction: {
-              parts: [
-                {
-                  text: `Sen deneyimli bir radyolog asistanısın. Türkçe yanıt ver. 
-Görüntü tıbbi bir DICOM görüntüsü olabileceği gibi, ekran görüntüsü, telefon fotoğrafı veya başka bir görüntü de olabilir.
-Tıbbi görüntüler için:
-1. Görüntü kalitesi ve teknik değerlendirme
-2. Anatomi ve normal yapılar
-3. Patolojik bulgular (varsa)
-4. Öneriler
-formatında sistematik rapor hazırla. Klinik korelasyon öner.
-Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`,
-                },
-              ],
-            },
-          }),
-        }
-      );
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          imageBase64,
+          systemPrompt: SYSTEM_PROMPT,
+        }),
+      });
 
       const data = await res.json();
-      if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-        return data.candidates[0].content.parts[0].text;
+
+      if (data.text) {
+        return data.text;
       }
       if (data.error) {
-        return `Hata: ${data.error.message}`;
+        return `Hata: ${data.error}`;
       }
       return 'Yanıt alınamadı.';
     } catch (err) {
@@ -304,38 +272,6 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`,
             </option>
           ))}
         </select>
-
-        {/* API Key input */}
-        {showApiInput && (
-          <div style={{ marginBottom: 12 }}>
-            <input
-              type="password"
-              placeholder="Gemini API Key"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-                background: 'var(--bg-tertiary)',
-                color: 'var(--text-primary)',
-                fontSize: 12,
-                fontFamily: "'JetBrains Mono', monospace",
-              }}
-            />
-            <div
-              style={{
-                fontSize: 10,
-                color: 'var(--text-muted)',
-                marginTop: 4,
-                fontFamily: "'JetBrains Mono', monospace",
-              }}
-            >
-              aistudio.google.com → API Key
-            </div>
-          </div>
-        )}
 
         {/* Analyze button */}
         <button
