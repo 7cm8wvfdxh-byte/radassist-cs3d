@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type RefObject } from 'react';
 
 interface SeriesInfo {
   seriesUID: string;
@@ -12,8 +12,10 @@ interface AIPanelProps {
   hasImages: boolean;
   activeSeries: SeriesInfo | null;
   imageIndex: number;
-  viewMode: 'dicom' | 'photo';
+  viewMode: 'dicom' | 'photo' | 'video';
   activePhoto: { url: string; name: string; file: File } | null;
+  activeVideo: { url: string; name: string; file: File } | null;
+  videoRef: RefObject<HTMLVideoElement | null>;
 }
 
 interface ChatMessage {
@@ -28,7 +30,7 @@ const AI_MODELS = [
   { id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'anthropic' },
 ];
 
-export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto }: AIPanelProps) {
+export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto, activeVideo, videoRef }: AIPanelProps) {
   const [model, setModel] = useState('gemini-2.5-flash');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -54,6 +56,17 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
 
   const captureViewport = async (): Promise<string | null> => {
     try {
+      // If viewing a video, capture current frame
+      if (viewMode === 'video' && videoRef.current) {
+        const video = videoRef.current;
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(video, 0, 0);
+        return canvas.toDataURL('image/png').split(',')[1];
+      }
       // If viewing a photo, convert it to base64
       if (viewMode === 'photo' && activePhoto?.file) {
         return new Promise((resolve) => {
@@ -145,7 +158,10 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`,
     let prompt: string;
     let userMessage: string;
 
-    if (viewMode === 'photo' && activePhoto) {
+    if (viewMode === 'video' && activeVideo) {
+      prompt = `Bu video karesini analiz et. Video: ${activeVideo.name}. Tıbbi bir görüntüyse radyoloji raporu hazırla, değilse içeriği açıkla.`;
+      userMessage = `🔍 Video karesi analizi başlatıldı (${activeVideo.name})`;
+    } else if (viewMode === 'photo' && activePhoto) {
       prompt = `Bu görüntüyü analiz et. Dosya adı: ${activePhoto.name}. Tıbbi bir görüntüyse radyoloji raporu hazırla, değilse içeriği açıkla.`;
       userMessage = `🔍 Fotoğraf analizi başlatıldı (${activePhoto.name})`;
     } else {
@@ -185,7 +201,9 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`,
 
     const imageBase64 = hasImages ? await captureViewport() : null;
     let context: string;
-    if (viewMode === 'photo' && activePhoto) {
+    if (viewMode === 'video' && activeVideo) {
+      context = `Mevcut görüntü: Video karesi - ${activeVideo.name}`;
+    } else if (viewMode === 'photo' && activePhoto) {
       context = `Mevcut görüntü: Fotoğraf - ${activePhoto.name}`;
     } else if (activeSeries) {
       context = `Mevcut görüntü: ${activeSeries.modality} - ${activeSeries.description}, Kesit ${imageIndex + 1}/${activeSeries.instanceCount}`;

@@ -43,13 +43,16 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [aiOpen, setAiOpen] = useState(true);
   const [sidebarMode, setSidebarMode] = useState<'local' | 'server'>('local');
-  const [viewMode, setViewMode] = useState<'dicom' | 'photo'>('dicom');
+  const [viewMode, setViewMode] = useState<'dicom' | 'photo' | 'video'>('dicom');
   const [photos, setPhotos] = useState<{ url: string; name: string; file: File }[]>([]);
   const [activePhoto, setActivePhoto] = useState(0);
+  const [videos, setVideos] = useState<{ url: string; name: string; file: File }[]>([]);
+  const [activeVideo, setActiveVideo] = useState(0);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderingEngineRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   // Initialize Cornerstone3D
   useEffect(() => {
@@ -87,9 +90,11 @@ export default function App() {
       try {
         const allFiles = Array.from(files);
 
-        // Separate DICOM files from regular images
+        // Separate DICOM files from regular images and videos
         const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'];
         const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff'];
+        const videoExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v', '.ogv'];
+        const videoTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo', 'video/x-matroska', 'video/ogg'];
 
         const regularImages = allFiles.filter(
           (f) =>
@@ -97,14 +102,53 @@ export default function App() {
             imageTypes.includes(f.type)
         );
 
+        const videoFiles = allFiles.filter(
+          (f) =>
+            videoExtensions.some((ext) => f.name.toLowerCase().endsWith(ext)) ||
+            videoTypes.includes(f.type)
+        );
+
         const dcmFiles = allFiles.filter(
           (f) =>
             !regularImages.includes(f) &&
+            !videoFiles.includes(f) &&
             (f.name.endsWith('.dcm') ||
               f.name.endsWith('.DCM') ||
               !f.name.includes('.') ||
               f.type === 'application/dicom')
         );
+
+        // Handle videos
+        if (videoFiles.length > 0) {
+          const videoList = videoFiles.map((f) => ({
+            url: URL.createObjectURL(f),
+            name: f.name,
+            file: f,
+          }));
+          setVideos((prev) => [...prev, ...videoList]);
+          setActiveVideo(videos.length);
+          setViewMode('video');
+          setLoading(false);
+
+          if (!patient) {
+            setPatient({
+              name: 'Video Yüklendi',
+              id: '',
+              studyDate: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+              studyDescription: `${videoFiles.length} video`,
+            });
+          }
+          // Also process any images that came with the videos
+          if (regularImages.length > 0) {
+            const photoList = regularImages.map((f) => ({
+              url: URL.createObjectURL(f),
+              name: f.name,
+              file: f,
+            }));
+            setPhotos((prev) => [...prev, ...photoList]);
+          }
+          return;
+        }
 
         // Handle regular images (screenshots, phone photos)
         if (regularImages.length > 0) {
@@ -132,7 +176,7 @@ export default function App() {
 
         // Handle DICOM files
         if (dcmFiles.length === 0) {
-          alert('Desteklenen dosya bulunamadı (.dcm, .jpg, .png vb.)');
+          alert('Desteklenen dosya bulunamadı (.dcm, .jpg, .png, .mp4 vb.)');
           setLoading(false);
           return;
         }
@@ -357,9 +401,10 @@ export default function App() {
     .filter(Boolean)
     .join(' ');
 
-  const hasImages = series.length > 0 || photos.length > 0;
+  const hasImages = series.length > 0 || photos.length > 0 || videos.length > 0;
   const hasDicom = series.length > 0;
   const hasPhotos = photos.length > 0;
+  const hasVideos = videos.length > 0;
 
   return (
     <div className={layoutClass}>
@@ -368,7 +413,7 @@ export default function App() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".dcm,.DCM,application/dicom,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff,.tif,image/*"
+        accept=".dcm,.DCM,application/dicom,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff,.tif,.mp4,.mov,.webm,.avi,.mkv,.m4v,image/*,video/*"
         style={{ display: 'none' }}
         onChange={handleFileInput}
         {...({ webkitdirectory: '', directory: '' } as any)}
@@ -449,7 +494,7 @@ export default function App() {
                   </svg>
                 </div>
                 <h3>Görüntü Yükle</h3>
-                <p>DICOM, ekran görüntüsü veya fotoğraf sürükleyip bırakın</p>
+                <p>DICOM, fotoğraf veya video sürükleyip bırakın</p>
                 <button className="browse-btn" onClick={handleBrowse}>
                   Dosya / Klasör Seç
                 </button>
@@ -537,35 +582,161 @@ export default function App() {
             </div>
           )}
 
-          {/* Mode switcher when both DICOM and photos exist */}
-          {hasDicom && hasPhotos && (
+          {/* Video Player */}
+          {viewMode === 'video' && hasVideos && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', flexDirection: 'column',
+              background: '#000',
+            }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                <video
+                  ref={videoRef}
+                  src={videos[activeVideo]?.url}
+                  controls
+                  style={{
+                    maxWidth: '100%', maxHeight: '100%',
+                    objectFit: 'contain',
+                  }}
+                />
+                {/* Video navigation */}
+                {videos.length > 1 && (
+                  <>
+                    <button
+                      onClick={() => setActiveVideo(Math.max(0, activeVideo - 1))}
+                      disabled={activeVideo === 0}
+                      style={{
+                        position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+                        width: 36, height: 36, borderRadius: '50%',
+                        border: 'none', background: 'rgba(255,255,255,0.15)',
+                        color: 'white', cursor: 'pointer', fontSize: 18,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        opacity: activeVideo === 0 ? 0.3 : 1,
+                      }}
+                    >
+                      ‹
+                    </button>
+                    <button
+                      onClick={() => setActiveVideo(Math.min(videos.length - 1, activeVideo + 1))}
+                      disabled={activeVideo === videos.length - 1}
+                      style={{
+                        position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                        width: 36, height: 36, borderRadius: '50%',
+                        border: 'none', background: 'rgba(255,255,255,0.15)',
+                        color: 'white', cursor: 'pointer', fontSize: 18,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        opacity: activeVideo === videos.length - 1 ? 0.3 : 1,
+                      }}
+                    >
+                      ›
+                    </button>
+                  </>
+                )}
+                {/* Delete & frame capture buttons */}
+                <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={() => {
+                      // Capture current frame as photo
+                      const video = videoRef.current;
+                      if (!video) return;
+                      const canvas = document.createElement('canvas');
+                      canvas.width = video.videoWidth;
+                      canvas.height = video.videoHeight;
+                      const ctx = canvas.getContext('2d');
+                      if (!ctx) return;
+                      ctx.drawImage(video, 0, 0);
+                      canvas.toBlob((blob) => {
+                        if (!blob) return;
+                        const file = new File([blob], `frame_${Date.now()}.png`, { type: 'image/png' });
+                        setPhotos((prev) => [...prev, {
+                          url: URL.createObjectURL(blob),
+                          name: file.name,
+                          file,
+                        }]);
+                      }, 'image/png');
+                    }}
+                    style={{
+                      height: 32, padding: '0 12px', borderRadius: 8,
+                      border: 'none', background: 'rgba(6,182,212,0.8)',
+                      color: 'white', cursor: 'pointer', fontSize: 11,
+                      fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                      display: 'flex', alignItems: 'center', gap: 4,
+                    }}
+                    title="Mevcut kareyi fotoğraf olarak kaydet"
+                  >
+                    📸 Kare Yakala
+                  </button>
+                  <button
+                    onClick={() => {
+                      const newVideos = videos.filter((_, i) => i !== activeVideo);
+                      setVideos(newVideos);
+                      if (newVideos.length === 0) {
+                        setViewMode(hasDicom ? 'dicom' : hasPhotos ? 'photo' : 'dicom');
+                      } else {
+                        setActiveVideo(Math.min(activeVideo, newVideos.length - 1));
+                      }
+                    }}
+                    style={{
+                      width: 32, height: 32, borderRadius: 8,
+                      border: 'none', background: 'rgba(239,68,68,0.8)',
+                      color: 'white', cursor: 'pointer', fontSize: 14,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                    title="Videoyu kaldır"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Mode switcher when multiple content types exist */}
+          {((hasDicom ? 1 : 0) + (hasPhotos ? 1 : 0) + (hasVideos ? 1 : 0)) > 1 && (
             <div style={{
               position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
               display: 'flex', gap: 2, background: 'rgba(0,0,0,0.6)',
               borderRadius: 8, padding: 3, zIndex: 10,
             }}>
-              <button
-                onClick={() => setViewMode('dicom')}
-                style={{
-                  padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
-                  fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-                  background: viewMode === 'dicom' ? 'var(--accent)' : 'transparent',
-                  color: viewMode === 'dicom' ? 'white' : 'var(--text-muted)',
-                }}
-              >
-                DICOM
-              </button>
-              <button
-                onClick={() => setViewMode('photo')}
-                style={{
-                  padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
-                  fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-                  background: viewMode === 'photo' ? 'var(--cyan)' : 'transparent',
-                  color: viewMode === 'photo' ? 'white' : 'var(--text-muted)',
-                }}
-              >
-                Fotoğraf ({photos.length})
-              </button>
+              {hasDicom && (
+                <button
+                  onClick={() => setViewMode('dicom')}
+                  style={{
+                    padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                    fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                    background: viewMode === 'dicom' ? 'var(--accent)' : 'transparent',
+                    color: viewMode === 'dicom' ? 'white' : 'var(--text-muted)',
+                  }}
+                >
+                  DICOM
+                </button>
+              )}
+              {hasPhotos && (
+                <button
+                  onClick={() => setViewMode('photo')}
+                  style={{
+                    padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                    fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                    background: viewMode === 'photo' ? 'var(--cyan)' : 'transparent',
+                    color: viewMode === 'photo' ? 'white' : 'var(--text-muted)',
+                  }}
+                >
+                  Fotoğraf ({photos.length})
+                </button>
+              )}
+              {hasVideos && (
+                <button
+                  onClick={() => setViewMode('video')}
+                  style={{
+                    padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                    fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+                    background: viewMode === 'video' ? 'var(--purple)' : 'transparent',
+                    color: viewMode === 'video' ? 'white' : 'var(--text-muted)',
+                  }}
+                >
+                  Video ({videos.length})
+                </button>
+              )}
             </div>
           )}
 
@@ -607,6 +778,20 @@ export default function App() {
             </>
           )}
 
+          {/* Video overlay info */}
+          {viewMode === 'video' && hasVideos && (
+            <>
+              <div className="viewport-overlay top-left">
+                <div>{videos[activeVideo]?.name}</div>
+              </div>
+              <div className="viewport-overlay bottom-right">
+                <div>
+                  {activeVideo + 1} / {videos.length}
+                </div>
+              </div>
+            </>
+          )}
+
           {loading && (
             <div className="loading-overlay">
               <div className="spinner" />
@@ -635,6 +820,11 @@ export default function App() {
               <span>{photos.length} fotoğraf</span>
             </div>
           )}
+          {hasVideos && (
+            <div className="status-item">
+              <span>{videos.length} video</span>
+            </div>
+          )}
           <div style={{ flex: 1 }} />
           <div className="status-item">
             <span>RadAssist v2.0</span>
@@ -650,6 +840,8 @@ export default function App() {
           imageIndex={imageIndex}
           viewMode={viewMode}
           activePhoto={photos[activePhoto] || null}
+          activeVideo={videos[activeVideo] || null}
+          videoRef={videoRef}
         />
       )}
     </div>
