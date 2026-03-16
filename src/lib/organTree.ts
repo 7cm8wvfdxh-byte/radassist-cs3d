@@ -199,3 +199,37 @@ export function findStructure(id: string): { category: OrganCategory; structure:
   }
   return null;
 }
+
+// ─── Organ Presets for AnnotationOverlay ───────────────────────────
+// Flat list with colors, derived from ORGAN_TREE categories
+// Single source of truth — AnnotationOverlay imports from here
+
+export interface OrganPreset {
+  id: string;
+  label: string;
+  icon: string;
+  color: string;
+}
+
+const ORGAN_COLORS: Record<string, string> = {
+  general: '#3b82f6',
+  brain: '#a855f7',
+  spine: '#f59e0b',
+  chest: '#22c55e',
+  heart: '#ef4444',
+  abdomen: '#06b6d4',
+  kidney: '#dc2626',
+  vascular: '#f97316',
+  pelvis: '#7c3aed',
+  neck: '#2563eb',
+  extremity: '#0891b2',
+  eye: '#4f46e5',
+};
+
+/** Flat organ presets for overlay/annotation components */
+export const ORGAN_PRESETS: OrganPreset[] = ORGAN_TREE.map((cat) => ({
+  id: cat.id,
+  label: cat.label,
+  icon: cat.icon,
+  color: ORGAN_COLORS[cat.id] || '#3b82f6',
+}));

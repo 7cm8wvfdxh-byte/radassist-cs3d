@@ -1,66 +1,48 @@
-import { useState, useRef, useEffect, type RefObject } from 'react';
-import type { AnnotationData } from './AnnotationOverlay';
+import { useState, useEffect } from 'react';
+import type { AIPanelProps } from '../types';
+import { captureCurrentView } from '../lib/mediaCapture';
+import { analyzeWithGemini, buildConversationHistory } from '../lib/geminiClient';
+import { useGeminiChat } from '../hooks/useGeminiChat';
+import { useClinicalContext } from '../hooks/useClinicalContext';
 import {
   getSystemPrompt,
   buildAnalysisPrompt,
   getScoringHint,
   MEDICAL_DISCLAIMER,
-  type ClinicalContext,
 } from '../lib/promptTemplates';
 import { renderMarkdown } from '../lib/markdownRenderer';
 
-interface SeriesInfo {
-  seriesUID: string;
-  description: string;
-  modality: string;
-  imageIds: string[];
-  instanceCount: number;
-}
+export default function AIPanel({
+  hasImages,
+  activeSeries,
+  imageIndex,
+  viewMode,
+  activePhoto,
+  activeVideo,
+  videoRef,
+  annotationData,
+  onAnnotationConsumed,
+}: AIPanelProps) {
+  const {
+    messages,
+    analyzing,
+    setAnalyzing,
+    scrollRef,
+    addUserMessage,
+    addAssistantMessage,
+    setMessages,
+  } = useGeminiChat({ initialMessage: 'RadAssist AI hazir. Goruntu yukleyin ve analiz icin gonderin.' });
 
-interface AIPanelProps {
-  hasImages: boolean;
-  activeSeries: SeriesInfo | null;
-  imageIndex: number;
-  viewMode: 'dicom' | 'photo' | 'video';
-  activePhoto: { url: string; name: string; file: File } | null;
-  activeVideo: { url: string; name: string; file: File } | null;
-  videoRef: RefObject<HTMLVideoElement | null>;
-  annotationData: AnnotationData | null;
-  onAnnotationConsumed: () => void;
-}
+  const {
+    showContext,
+    setShowContext,
+    clinicalContext,
+    setClinicalContext,
+    hasContext,
+    resetContext,
+  } = useClinicalContext();
 
-interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: Date;
-}
-
-export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto, activeVideo, videoRef, annotationData, onAnnotationConsumed }: AIPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: 'system',
-      content: 'RadAssist AI hazir. Goruntu yukleyin ve analiz icin gonderin.',
-      timestamp: new Date(),
-    },
-  ]);
   const [inputText, setInputText] = useState('');
-  const [analyzing, setAnalyzing] = useState(false);
-
-  // Clinical context
-  const [showContext, setShowContext] = useState(false);
-  const [clinicalContext, setClinicalContext] = useState<ClinicalContext>({
-    age: '',
-    gender: '',
-    complaint: '',
-    history: '',
-    clinicalQuestion: '',
-  });
-
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
 
   // Auto-trigger analysis when annotation data arrives
   useEffect(() => {
@@ -81,10 +63,9 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
         seriesDescription: activeSeries?.description,
         organLabel: annotationData.organLabel,
         hasDrawing: annotationData.hasDrawing,
-        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+        clinicalContext: hasContext() ? clinicalContext : undefined,
       });
 
-      // Add scoring hint if applicable
       const scoringHint = getScoringHint(annotationData.organ, modality);
       const fullPrompt = scoringHint ? `${prompt}\n\n${scoringHint}` : prompt;
 
@@ -92,22 +73,17 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
         ? `Isaretlenmis bolge (${annotationData.organLabel})`
         : annotationData.organLabel;
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'user',
-          content: `Hedefli analiz: ${regionInfo}${annotationData.hasDrawing ? ' (cizimli)' : ''}`,
-          timestamp: new Date(),
-        },
-      ]);
+      addUserMessage(`Hedefli analiz: ${regionInfo}${annotationData.hasDrawing ? ' (cizimli)' : ''}`);
 
-      const result = await analyzeWithGemini(fullPrompt, imageToSend, systemPrompt);
+      const history = buildConversationHistory(messages);
+      const result = await analyzeWithGemini({
+        prompt: fullPrompt,
+        imageBase64: imageToSend,
+        systemPrompt,
+        history,
+      });
 
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: result, timestamp: new Date() },
-      ]);
-
+      addAssistantMessage(result);
       setAnalyzing(false);
       onAnnotationConsumed();
     };
@@ -115,79 +91,12 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
     runAnnotationAnalysis();
   }, [annotationData]);
 
-  const hasClinicalContext = () => {
-    return !!(clinicalContext.age || clinicalContext.gender || clinicalContext.complaint || clinicalContext.history || clinicalContext.clinicalQuestion);
-  };
-
   const captureViewport = async (): Promise<string | null> => {
-    try {
-      if (viewMode === 'video' && videoRef.current) {
-        const video = videoRef.current;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-        ctx.drawImage(video, 0, 0);
-        return canvas.toDataURL('image/png').split(',')[1];
-      }
-      if (viewMode === 'photo' && activePhoto?.file) {
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const result = reader.result as string;
-            resolve(result.split(',')[1]);
-          };
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(activePhoto.file);
-        });
-      }
-      const canvas = document.querySelector('.viewport-element canvas') as HTMLCanvasElement;
-      if (!canvas) return null;
-      return canvas.toDataURL('image/png').split(',')[1];
-    } catch {
-      return null;
-    }
-  };
-
-  // Build conversation history for Gemini multi-turn
-  const buildConversationHistory = () => {
-    const history: { role: string; parts: { text: string }[] }[] = [];
-    for (const msg of messages) {
-      if (msg.role === 'system') continue;
-      history.push({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }],
-      });
-    }
-    return history;
-  };
-
-  const analyzeWithGemini = async (prompt: string, imageBase64: string | null, systemPrompt?: string) => {
-    try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          imageBase64,
-          systemPrompt: systemPrompt || getSystemPrompt(activeSeries?.modality),
-          history: buildConversationHistory(),
-        }),
-      });
-
-      const data = await res.json();
-
-      if (data.text) {
-        return data.text;
-      }
-      if (data.error) {
-        return `Hata: ${data.error}`;
-      }
-      return 'Yanit alinamadi.';
-    } catch (err) {
-      return `Baglanti hatasi: ${(err as Error).message}`;
-    }
+    return captureCurrentView({
+      viewMode,
+      videoRef: videoRef.current,
+      activePhoto,
+    });
   };
 
   const handleAnalyze = async () => {
@@ -203,12 +112,12 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
 
     if (viewMode === 'video' && activeVideo) {
       prompt = buildAnalysisPrompt({
-        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+        clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (Video: ${activeVideo.name})`;
     } else if (viewMode === 'photo' && activePhoto) {
       prompt = buildAnalysisPrompt({
-        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+        clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (${activePhoto.name})`;
     } else {
@@ -217,23 +126,22 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
         seriesDescription: activeSeries?.description,
         imageIndex,
         totalImages: activeSeries?.instanceCount,
-        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+        clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (${modality || 'DICOM'} - Kesit ${imageIndex + 1})`;
     }
 
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: userMessage, timestamp: new Date() },
-    ]);
+    addUserMessage(userMessage);
 
-    const result = await analyzeWithGemini(prompt, imageBase64, systemPrompt);
+    const history = buildConversationHistory(messages);
+    const result = await analyzeWithGemini({
+      prompt,
+      imageBase64,
+      systemPrompt,
+      history,
+    });
 
-    setMessages((prev) => [
-      ...prev,
-      { role: 'assistant', content: result, timestamp: new Date() },
-    ]);
-
+    addAssistantMessage(result);
     setAnalyzing(false);
   };
 
@@ -242,11 +150,7 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
     const userMsg = inputText.trim();
     setInputText('');
 
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: userMsg, timestamp: new Date() },
-    ]);
-
+    addUserMessage(userMsg);
     setAnalyzing(true);
 
     const imageBase64 = hasImages ? await captureViewport() : null;
@@ -262,13 +166,18 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
     }
 
     const prompt = `${context}\n\nKullanici sorusu: ${userMsg}`;
-    const result = await analyzeWithGemini(prompt, imageBase64);
-
-    setMessages((prev) => [
-      ...prev,
-      { role: 'assistant', content: result, timestamp: new Date() },
+    const history = buildConversationHistory([
+      ...messages,
+      { role: 'user', content: userMsg, timestamp: new Date() },
     ]);
+    const result = await analyzeWithGemini({
+      prompt,
+      imageBase64,
+      modality: activeSeries?.modality,
+      history,
+    });
 
+    addAssistantMessage(result);
     setAnalyzing(false);
   };
 
@@ -341,8 +250,8 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
             padding: '7px 10px',
             borderRadius: 8,
             border: '1px solid var(--border)',
-            background: hasClinicalContext() ? 'rgba(34,197,94,0.1)' : 'var(--bg-tertiary)',
-            color: hasClinicalContext() ? '#22c55e' : 'var(--text-secondary)',
+            background: hasContext() ? 'rgba(34,197,94,0.1)' : 'var(--bg-tertiary)',
+            color: hasContext() ? '#22c55e' : 'var(--text-secondary)',
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
@@ -354,10 +263,10 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
           }}
         >
           <span>
-            {hasClinicalContext() ? 'Klinik Bilgi Girildi' : 'Klinik Bilgi Ekle'}
-            {hasClinicalContext() && ' (aktif)'}
+            {hasContext() ? 'Klinik Bilgi Girildi' : 'Klinik Bilgi Ekle'}
+            {hasContext() && ' (aktif)'}
           </span>
-          <span style={{ fontSize: 10 }}>{showContext ? '▲' : '▼'}</span>
+          <span style={{ fontSize: 10 }}>{showContext ? '\u25B2' : '\u25BC'}</span>
         </button>
 
         {/* Clinical Context Form */}
@@ -387,7 +296,7 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
                 <label style={contextLabelStyle}>Cinsiyet</label>
                 <select
                   value={clinicalContext.gender}
-                  onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as ClinicalContext['gender'] })}
+                  onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as 'male' | 'female' | '' })}
                   style={contextFieldStyle}
                 >
                   <option value="">Seciniz</option>
@@ -427,9 +336,7 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
               />
             </div>
             <button
-              onClick={() => {
-                setClinicalContext({ age: '', gender: '', complaint: '', history: '', clinicalQuestion: '' });
-              }}
+              onClick={resetContext}
               style={{
                 padding: '4px 8px',
                 borderRadius: 4,
@@ -524,7 +431,7 @@ export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode,
               )}
             </div>
           ))}
-          <div ref={chatEndRef} />
+          <div ref={scrollRef} />
         </div>
       </div>
 
