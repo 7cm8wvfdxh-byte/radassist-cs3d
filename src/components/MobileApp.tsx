@@ -2,6 +2,14 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { getUser } from '../lib/logger';
 import { ORGAN_TREE, findStructure } from '../lib/organTree';
 import type { OrganCategory } from '../lib/organTree';
+import {
+  getSystemPrompt,
+  getScoringHint,
+  MEDICAL_DISCLAIMER,
+  type ClinicalContext,
+  buildClinicalContextString,
+} from '../lib/promptTemplates';
+import { renderMarkdown } from '../lib/markdownRenderer';
 
 interface MobileAppProps { onSwitchToDesktop: () => void; }
 
@@ -37,6 +45,12 @@ export default function MobileApp(_props: MobileAppProps) {
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
 
+  // Clinical context
+  const [showContext, setShowContext] = useState(false);
+  const [clinicalContext, setClinicalContext] = useState<ClinicalContext>({
+    age: '', gender: '', complaint: '', history: '', clinicalQuestion: '',
+  });
+
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -50,7 +64,6 @@ export default function MobileApp(_props: MobileAppProps) {
     resultEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Fullscreen change listener
   useEffect(() => {
     const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handler);
@@ -71,18 +84,19 @@ export default function MobileApp(_props: MobileAppProps) {
     }
   };
 
-  // Build grid image from selected frames — single image, saves tokens
+  const hasClinicalContext = () => {
+    return !!(clinicalContext.age || clinicalContext.gender || clinicalContext.complaint || clinicalContext.history || clinicalContext.clinicalQuestion);
+  };
+
   const buildFrameGrid = (selectedFrames: CapturedFrame[]): Promise<string> => {
     return new Promise((resolve) => {
       const count = selectedFrames.length;
       if (count === 0) { resolve(''); return; }
       if (count === 1) { resolve(selectedFrames[0].base64); return; }
 
-      // Calculate grid dimensions
       const cols = count <= 2 ? 2 : count <= 4 ? 2 : 3;
       const rows = Math.ceil(count / cols);
 
-      // Load all images
       const images: HTMLImageElement[] = [];
       let loaded = 0;
 
@@ -92,9 +106,8 @@ export default function MobileApp(_props: MobileAppProps) {
           images[i] = img;
           loaded++;
           if (loaded === count) {
-            // All loaded — draw grid
             const cellW = 512;
-            const cellH = Math.round(cellW * 0.75); // 4:3
+            const cellH = Math.round(cellW * 0.75);
             const padding = 4;
             const labelH = 24;
             const gridW = cols * cellW + (cols - 1) * padding;
@@ -113,22 +126,14 @@ export default function MobileApp(_props: MobileAppProps) {
               const x = col * (cellW + padding);
               const y = row * (cellH + labelH + padding);
 
-              // Draw image
-              if (images[idx]) {
-                ctx.drawImage(images[idx], x, y, cellW, cellH);
-              }
+              if (images[idx]) ctx.drawImage(images[idx], x, y, cellW, cellH);
 
-              // Draw label
               ctx.fillStyle = 'rgba(0,0,0,0.7)';
               ctx.fillRect(x, y + cellH, cellW, labelH);
               ctx.fillStyle = '#fff';
               ctx.font = 'bold 14px sans-serif';
               ctx.textAlign = 'center';
-              ctx.fillText(
-                `Kare ${idx + 1} — ${fmtTime(frame.timestamp)}`,
-                x + cellW / 2,
-                y + cellH + 17
-              );
+              ctx.fillText(`Kare ${idx + 1} - ${fmtTime(frame.timestamp)}`, x + cellW / 2, y + cellH + 17);
             });
 
             resolve(canvas.toDataURL('image/png').split(',')[1]);
@@ -139,7 +144,7 @@ export default function MobileApp(_props: MobileAppProps) {
     });
   };
 
-  // ─── FILE HANDLING ───
+  // FILE HANDLING
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -155,7 +160,7 @@ export default function MobileApp(_props: MobileAppProps) {
     e.target.value = '';
   };
 
-  // ─── BASE64 HELPERS ───
+  // BASE64 HELPERS
   const fileToBase64 = (file: File): Promise<string> =>
     new Promise((res, rej) => {
       const r = new FileReader();
@@ -178,7 +183,7 @@ export default function MobileApp(_props: MobileAppProps) {
     } catch { return null; }
   };
 
-  // ─── VIDEO FRAME CAPTURE ───
+  // VIDEO FRAME CAPTURE
   const captureFrame = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -194,7 +199,7 @@ export default function MobileApp(_props: MobileAppProps) {
     setTimeout(() => framesRef.current?.scrollTo({ left: 99999, behavior: 'smooth' }), 100);
   };
 
-  // ─── ANNOTATION CANVAS ───
+  // ANNOTATION CANVAS
   const initAnnotationCanvas = useCallback(async () => {
     const base64 = await getBase64();
     if (!base64 || !canvasRef.current) return;
@@ -235,7 +240,6 @@ export default function MobileApp(_props: MobileAppProps) {
       ctx.lineJoin = 'round';
       ctx.stroke();
     }
-    // Fill last closed path
     if (paths.length > 0) {
       const last = paths[paths.length - 1];
       if (last.length > 5) {
@@ -273,28 +277,56 @@ export default function MobileApp(_props: MobileAppProps) {
     return canvasRef.current.toDataURL('image/png').split(',')[1];
   };
 
-  // ─── AI CALL ───
+  // Build conversation history for multi-turn
+  const buildConversationHistory = () => {
+    const history: { role: string; parts: { text: string }[] }[] = [];
+    for (const msg of messages) {
+      history.push({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.text }],
+      });
+    }
+    return history;
+  };
+
+  // AI CALL
   const callAI = async (prompt: string, base64: string | null): Promise<string> => {
     try {
+      const systemPrompt = `Sen deneyimli bir radyolog asistanissin. Turkce yanit ver. Asagidaki yapida sistematik rapor hazirla:
+## TEKNIK
+## BULGULAR
+## SONUC / IZLENIM
+## ONERI
+Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
+
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, imageBase64: base64,
-          systemPrompt: `Sen deneyimli bir radyolog asistanısın. Türkçe yanıt ver. Kısa ve net ol. Tıbbi görüntüler için: Bulgular, olası tanı, öneriler. Tıbbi olmayan için: İçeriği açıkla.`,
+        body: JSON.stringify({
+          prompt,
+          imageBase64: base64,
+          systemPrompt,
+          history: buildConversationHistory(),
         }),
       });
       const data = await res.json();
-      return data.text || data.error || 'Yanıt alınamadı.';
+      return data.text || data.error || 'Yanit alinamadi.';
     } catch (err) { return `Hata: ${(err as Error).message}`; }
   };
 
-  // ─── ANALYZE ACTIONS ───
+  // ANALYZE ACTIONS
   const structureLabel = findStructure(selectedStructure)?.structure.label || 'Genel';
 
   const handleGeneralAnalyze = async () => {
     setAnalyzing(true); setStep('result');
     const base64 = await getBase64();
-    const text = await callAI('Bu görüntüyü genel olarak analiz et. Tüm yapıları değerlendir, sistematik rapor hazırla.', base64);
+
+    let prompt = 'Bu goruntuyu genel olarak analiz et. Tum yapilari degerlendir, sistematik rapor hazirla.';
+    if (hasClinicalContext()) {
+      prompt += buildClinicalContextString(clinicalContext);
+    }
+
+    const text = await callAI(prompt, base64);
     setMessages([{ role: 'ai', text }]);
     setAnalyzing(false);
   };
@@ -302,7 +334,17 @@ export default function MobileApp(_props: MobileAppProps) {
   const handleStructureAnalyze = async () => {
     setAnalyzing(true); setStep('result');
     const base64 = await getBase64();
-    const text = await callAI(`Bu görüntüde "${structureLabel}" yapısına/bölgesine odaklanarak analiz et. Bu alana özgü bulguları detaylı değerlendir.`, base64);
+
+    let prompt = `Bu goruntude "${structureLabel}" yapisina/bolgesine odaklanarak analiz et. Bu alana ozgu bulgulari detayli degerlendir.`;
+    if (hasClinicalContext()) {
+      prompt += buildClinicalContextString(clinicalContext);
+    }
+
+    // Add scoring hint if applicable
+    const scoringHint = getScoringHint(selectedStructure);
+    if (scoringHint) prompt += `\n\n${scoringHint}`;
+
+    const text = await callAI(prompt, base64);
     setMessages([{ role: 'ai', text }]);
     setAnalyzing(false);
   };
@@ -311,11 +353,17 @@ export default function MobileApp(_props: MobileAppProps) {
     setAnalyzing(true); setStep('result');
     const base64 = getAnnotatedBase64();
     const label = annotationLabel.trim() || structureLabel;
-    const text = await callAI(
-      `Bu görüntüde kırmızı ile işaretlenmiş bölgeyi analiz et. Kullanıcı bu alanın "${label}" olduğunu belirtiyor. İşaretli bölgedeki bulguları detaylı değerlendir. Patoloji varsa tanımla.`,
-      base64
-    );
-    setMessages([{ role: 'user', text: `✏️ İşaretli bölge: "${label}"` }, { role: 'ai', text }]);
+
+    let prompt = `Bu goruntude kirmizi ile isaretlenmis bolgeyi analiz et. Kullanici bu alanin "${label}" oldugunu belirtiyor. Isaretli bolgedeki bulgulari detayli degerlendir. Patoloji varsa tanimla.`;
+    if (hasClinicalContext()) {
+      prompt += buildClinicalContextString(clinicalContext);
+    }
+
+    const scoringHint = getScoringHint(selectedStructure);
+    if (scoringHint) prompt += `\n\n${scoringHint}`;
+
+    const text = await callAI(prompt, base64);
+    setMessages([{ role: 'user', text: `Isaretli bolge: "${label}"` }, { role: 'ai', text }]);
     setAnalyzing(false);
   };
 
@@ -324,19 +372,22 @@ export default function MobileApp(_props: MobileAppProps) {
     if (sel.length === 0) return;
     setAnalyzing(true); setStep('result');
 
-    // Build single grid image from all selected frames
     const gridBase64 = await buildFrameGrid(sel);
     const timeLabels = sel.map((f, i) => `Kare ${i + 1}: ${fmtTime(f.timestamp)}`).join(', ');
 
-    const prompt = sel.length === 1
+    let prompt = sel.length === 1
       ? (selectedStructure === 'general_full'
-          ? 'Bu video karesini analiz et. Sistematik rapor hazırla.'
-          : `Bu video karesinde ${structureLabel} bölgesine odaklanarak analiz et.`)
-      : `Bu görüntüde ${sel.length} adet video karesi grid halinde gösterilmektedir (${timeLabels}). ${selectedStructure === 'general_full' ? 'Her bir kareyi' : `${structureLabel} bölgesine odaklanarak her kareyi`} değerlendir. Bulgularını kare numaralarına göre raporla.`;
+          ? 'Bu video karesini analiz et. Sistematik rapor hazirla.'
+          : `Bu video karesinde ${structureLabel} bolgesine odaklanarak analiz et.`)
+      : `Bu goruntude ${sel.length} adet video karesi grid halinde gosterilmektedir (${timeLabels}). ${selectedStructure === 'general_full' ? 'Her bir kareyi' : `${structureLabel} bolgesine odaklanarak her kareyi`} degerlendir. Bulgularini kare numaralarina gore raporla.`;
+
+    if (hasClinicalContext()) {
+      prompt += buildClinicalContextString(clinicalContext);
+    }
 
     setMessages([{
       role: 'user',
-      text: `📊 ${sel.length} kare analizi (${timeLabels})`,
+      text: `${sel.length} kare analizi (${timeLabels})`,
     }]);
 
     const text = await callAI(prompt, gridBase64);
@@ -367,7 +418,7 @@ export default function MobileApp(_props: MobileAppProps) {
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
   const selCount = frames.filter((f) => f.selected).length;
 
-  // ════════════ RENDER ════════════
+  // RENDER
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: '#0a0a0c', color: '#e8e8ec', fontFamily: "'Plus Jakarta Sans',sans-serif", overflow: 'hidden' }}>
 
@@ -375,24 +426,28 @@ export default function MobileApp(_props: MobileAppProps) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid #1e1e24', background: '#111114', flexShrink: 0, zIndex: 5 }}>
         <div style={{ width: 28, height: 28, borderRadius: 7, background: 'linear-gradient(135deg,#3b82f6,#a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', fontFamily: "'JetBrains Mono',monospace" }}>RA</div>
         <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>RadAssist</span>
-        {step !== 'capture' && <button onClick={step === 'annotate' ? () => setStep('review') : handleReset} style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #2a2a35', background: 'transparent', color: '#9898a8', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}>← {step === 'annotate' ? 'Geri' : 'Yeni'}</button>}
+        {step !== 'capture' && <button onClick={step === 'annotate' ? () => setStep('review') : handleReset} style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #2a2a35', background: 'transparent', color: '#9898a8', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}>{step === 'annotate' ? 'Geri' : 'Yeni'}</button>}
         <span style={{ fontSize: 10, color: '#606070' }}>{getUser()}</span>
       </div>
 
-      {/* ── CAPTURE ── */}
+      {/* CAPTURE */}
       {step === 'capture' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleFileSelect} />
           <input ref={galleryRef} type="file" accept="image/*,video/*,.dcm" style={{ display: 'none' }} onChange={handleFileSelect} />
-          <div style={{ fontSize: 48, marginBottom: 16 }}>📷</div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, textAlign: 'center' }}>Görüntü veya Video Yükle</h2>
-          <p style={{ fontSize: 14, color: '#9898a8', marginBottom: 32, textAlign: 'center' }}>Fotoğraf çekin, galeriden seçin veya video yükleyin</p>
-          <button onClick={() => cameraRef.current?.click()} style={{ ...btnP, marginBottom: 12 }}>📸 Fotoğraf Çek</button>
-          <button onClick={() => galleryRef.current?.click()} style={btnS}>🖼️ Galeri / Video Seç</button>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>{'<_>'}</div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, textAlign: 'center' }}>Goruntu veya Video Yukle</h2>
+          <p style={{ fontSize: 14, color: '#9898a8', marginBottom: 32, textAlign: 'center' }}>Fotograf cekin, galeriden secin veya video yukleyin</p>
+          <button onClick={() => cameraRef.current?.click()} style={{ ...btnP, marginBottom: 12 }}>Fotograf Cek</button>
+          <button onClick={() => galleryRef.current?.click()} style={btnS}>Galeri / Video Sec</button>
+          {/* Disclaimer */}
+          <div style={{ marginTop: 32, padding: '10px 16px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)', fontSize: 11, color: '#d97706', lineHeight: 1.5, maxWidth: 340, textAlign: 'center' }}>
+            {MEDICAL_DISCLAIMER}
+          </div>
         </div>
       )}
 
-      {/* ── REVIEW ── */}
+      {/* REVIEW */}
       {step === 'review' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {/* Media */}
@@ -413,7 +468,6 @@ export default function MobileApp(_props: MobileAppProps) {
               : <video ref={videoRef} src={mediaUrl} controls playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             }
 
-            {/* Video overlay buttons — visible in both normal and fullscreen */}
             {mediaType === 'video' && (
               <div style={{
                 position: 'absolute', bottom: isFullscreen ? 60 : 8, left: 0, right: 0,
@@ -428,7 +482,7 @@ export default function MobileApp(_props: MobileAppProps) {
                   cursor: 'pointer', fontFamily: 'inherit',
                   boxShadow: '0 2px 12px rgba(6,182,212,0.4)',
                 }}>
-                  📸 Kare Yakala {frames.length > 0 ? `(${frames.length})` : ''}
+                  Kare Yakala {frames.length > 0 ? `(${frames.length})` : ''}
                 </button>
                 <button onClick={toggleFullscreen} style={{
                   padding: '10px 14px', borderRadius: 12,
@@ -436,12 +490,11 @@ export default function MobileApp(_props: MobileAppProps) {
                   backdropFilter: 'blur(8px)',
                   color: '#fff', fontSize: 14, cursor: 'pointer',
                 }}>
-                  {isFullscreen ? '⊡' : '⊞'}
+                  {isFullscreen ? '[-]' : '[+]'}
                 </button>
               </div>
             )}
 
-            {/* Frame count badge in fullscreen */}
             {mediaType === 'video' && isFullscreen && frames.length > 0 && (
               <div style={{
                 position: 'absolute', top: 16, right: 16,
@@ -449,7 +502,7 @@ export default function MobileApp(_props: MobileAppProps) {
                 background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
                 color: '#06b6d4', fontSize: 13, fontWeight: 700, zIndex: 10,
               }}>
-                {frames.length} kare yakalandı
+                {frames.length} kare yakalandi
               </div>
             )}
           </div>
@@ -462,17 +515,65 @@ export default function MobileApp(_props: MobileAppProps) {
                   <div key={f.id} onClick={() => setFrames((p) => p.map((x) => x.id === f.id ? { ...x, selected: !x.selected } : x))} style={{ position: 'relative', flexShrink: 0, width: 64, borderRadius: 8, overflow: 'hidden', border: `2px solid ${f.selected ? '#3b82f6' : '#1e1e24'}`, opacity: f.selected ? 1 : 0.4 }}>
                     <img src={f.thumbnailUrl} alt="" style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
                     <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center', background: 'rgba(0,0,0,0.7)', fontSize: 8, color: '#999', padding: 1 }}>{fmtTime(f.timestamp)}</div>
-                    {f.selected && <div style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>✓</div>}
+                    {f.selected && <div style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>+</div>}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Organ picker — 2 level */}
+          {/* Clinical context (collapsible) */}
+          <div style={{ padding: '8px 16px 0' }}>
+            <button
+              onClick={() => setShowContext(!showContext)}
+              style={{
+                width: '100%', padding: '8px 12px', borderRadius: 10,
+                border: `1px solid ${hasClinicalContext() ? 'rgba(34,197,94,0.3)' : '#1e1e24'}`,
+                background: hasClinicalContext() ? 'rgba(34,197,94,0.08)' : '#111114',
+                color: hasClinicalContext() ? '#22c55e' : '#9898a8',
+                fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}
+            >
+              <span>{hasClinicalContext() ? 'Klinik Bilgi (aktif)' : 'Klinik Bilgi Ekle (opsiyonel)'}</span>
+              <span style={{ fontSize: 10 }}>{showContext ? 'v' : '>'}</span>
+            </button>
+
+            {showContext && (
+              <div style={{ marginTop: 8, padding: 12, borderRadius: 10, background: '#111114', border: '1px solid #1e1e24', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={mobileLabel}>Yas</div>
+                    <input type="text" placeholder="45" value={clinicalContext.age} onChange={(e) => setClinicalContext({ ...clinicalContext, age: e.target.value })} style={mobileInput} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={mobileLabel}>Cinsiyet</div>
+                    <select value={clinicalContext.gender} onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as ClinicalContext['gender'] })} style={mobileInput}>
+                      <option value="">-</option>
+                      <option value="male">Erkek</option>
+                      <option value="female">Kadin</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <div style={mobileLabel}>Sikayet</div>
+                  <input type="text" placeholder="bas agrisi, karin agrisi..." value={clinicalContext.complaint} onChange={(e) => setClinicalContext({ ...clinicalContext, complaint: e.target.value })} style={mobileInput} />
+                </div>
+                <div>
+                  <div style={mobileLabel}>Ozgecmis</div>
+                  <input type="text" placeholder="DM, HT, bilinen kitle..." value={clinicalContext.history} onChange={(e) => setClinicalContext({ ...clinicalContext, history: e.target.value })} style={mobileInput} />
+                </div>
+                <div>
+                  <div style={mobileLabel}>Klinik Soru</div>
+                  <input type="text" placeholder="metastaz? lezyon karakteri?" value={clinicalContext.clinicalQuestion} onChange={(e) => setClinicalContext({ ...clinicalContext, clinicalQuestion: e.target.value })} style={mobileInput} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Organ picker */}
           <div style={{ padding: '12px 16px' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#9898a8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Bölge / Organ</div>
-            {/* Categories */}
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#9898a8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Bolge / Organ</div>
             <div style={{ display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 8 }}>
               {ORGAN_TREE.map((cat) => (
                 <button key={cat.id} onClick={() => { setSelectedCategory(selectedCategory?.id === cat.id ? null : cat); if (cat.id === 'general') setSelectedStructure('general_full'); }}
@@ -481,7 +582,6 @@ export default function MobileApp(_props: MobileAppProps) {
                 </button>
               ))}
             </div>
-            {/* Sub-structures */}
             {selectedCategory && selectedCategory.id !== 'general' && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
                 {selectedCategory.structures.map((s) => (
@@ -496,31 +596,27 @@ export default function MobileApp(_props: MobileAppProps) {
 
           {/* Action buttons */}
           <div style={{ padding: '10px 16px', marginTop: 'auto', borderTop: '1px solid #1e1e24', background: '#0a0a0c', position: 'sticky', bottom: 0, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Annotate button */}
             <button onClick={() => { setStep('annotate'); setPaths([]); setAnnotationLabel(''); setTimeout(initAnnotationCanvas, 100); }}
               style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1.5px solid #f59e0b', background: 'rgba(245,158,11,0.1)', color: '#fbbf24', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-              ✏️ Bölge İşaretle + Etiketle
+              Bolge Isaretle + Etiketle
             </button>
-            {/* General or structure analyze */}
             <button onClick={selectedStructure === 'general_full' ? handleGeneralAnalyze : handleStructureAnalyze}
               style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-              🔬 {selectedStructure === 'general_full' ? 'Genel Analiz' : `${structureLabel} Analiz Et`}
+              {selectedStructure === 'general_full' ? 'Genel Analiz' : `${structureLabel} Analiz Et`}
             </button>
-            {/* Multi-frame */}
             {mediaType === 'video' && selCount > 0 && (
               <button onClick={handleMultiFrameAnalyze}
                 style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1.5px solid #06b6d4', background: 'rgba(6,182,212,0.1)', color: '#06b6d4', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                📊 {selCount} Kareyi Toplu Analiz
+                {selCount} Kareyi Toplu Analiz
               </button>
             )}
           </div>
         </div>
       )}
 
-      {/* ── ANNOTATE ── */}
+      {/* ANNOTATE */}
       {step === 'annotate' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Canvas */}
           <div style={{ flex: 1, position: 'relative', background: '#000', touchAction: 'none' }}>
             <canvas ref={canvasRef}
               style={{ width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none' }}
@@ -529,57 +625,61 @@ export default function MobileApp(_props: MobileAppProps) {
             />
             {paths.length === 0 && (
               <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none', color: '#606070', fontSize: 13 }}>
-                Parmağınızla çizin
+                Parmaginizla cizin
               </div>
             )}
-            {/* Undo / clear */}
             <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: 6 }}>
               {paths.length > 0 && <>
-                <button onClick={() => setPaths((p) => p.slice(0, -1))} style={floatBtn}>↩</button>
-                <button onClick={() => setPaths([])} style={floatBtn}>🗑</button>
+                <button onClick={() => setPaths((p) => p.slice(0, -1))} style={floatBtn}>{'<-'}</button>
+                <button onClick={() => setPaths([])} style={floatBtn}>X</button>
               </>}
             </div>
-            {/* Drawing count */}
             {paths.length > 0 && (
               <div style={{ position: 'absolute', top: 10, left: 10, padding: '4px 10px', borderRadius: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171', fontSize: 11, fontWeight: 600 }}>
-                {paths.length} çizim
+                {paths.length} cizim
               </div>
             )}
           </div>
 
-          {/* Label input + send */}
           <div style={{ padding: '12px 16px', background: '#111114', borderTop: '1px solid #1e1e24', flexShrink: 0 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: '#9898a8', marginBottom: 6 }}>
-              Bu işaretli alan ne? (AI'a söyle)
+              Bu isaretli alan ne? (AI'a soyle)
             </div>
             <input
               value={annotationLabel}
               onChange={(e) => setAnnotationLabel(e.target.value)}
-              placeholder={`Örn: sol böbrek alt pol kisti, mezenterik LAP, hipokampal atrofi...`}
+              placeholder="Orn: sol bobrek alt pol kisti, mezenterik LAP..."
               style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #2a2a35', background: '#19191e', color: '#e8e8ec', fontSize: 15, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }}
             />
             <button
               onClick={handleAnnotatedAnalyze}
               disabled={paths.length === 0}
               style={{ width: '100%', padding: '14px 0', borderRadius: 12, border: 'none', background: paths.length > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#333', color: '#fff', fontSize: 15, fontWeight: 700, cursor: paths.length > 0 ? 'pointer' : 'default', fontFamily: 'inherit', opacity: paths.length > 0 ? 1 : 0.4 }}>
-              🎯 İşaretli Bölgeyi Analiz Et
+              Isaretli Bolgeyi Analiz Et
             </button>
           </div>
         </div>
       )}
 
-      {/* ── RESULT ── */}
+      {/* RESULT */}
       {step === 'result' && (<>
-        {/* Mini header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', background: '#111114', borderBottom: '1px solid #1e1e24', flexShrink: 0 }}>
           <div style={{ width: 38, height: 38, borderRadius: 8, overflow: 'hidden', background: '#19191e', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             {mediaType === 'image'
               ? <img src={mediaUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              : <span style={{ fontSize: 18 }}>🎬</span>}
+              : <span style={{ fontSize: 14, fontFamily: "'JetBrains Mono',monospace" }}>VID</span>}
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>{structureLabel} Analizi</div>
-            <div style={{ fontSize: 11, color: '#606070' }}>{analyzing ? 'Analiz ediliyor...' : 'Tamamlandı'}</div>
+            <div style={{ fontSize: 11, color: '#606070' }}>{analyzing ? 'Analiz ediliyor...' : 'Tamamlandi'}</div>
+          </div>
+          <div style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: 'rgba(6,182,212,0.15)', color: '#06b6d4', fontWeight: 600 }}>Gemini</div>
+        </div>
+
+        {/* Disclaimer in result */}
+        <div style={{ padding: '6px 16px', background: '#0a0a0c', flexShrink: 0 }}>
+          <div style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.06)', fontSize: 9, color: '#92400e', lineHeight: 1.4 }}>
+            {MEDICAL_DISCLAIMER}
           </div>
         </div>
 
@@ -594,7 +694,10 @@ export default function MobileApp(_props: MobileAppProps) {
           {messages.map((m, i) => (
             <div key={i} style={{ marginBottom: 12, ...(m.role === 'user' ? { marginLeft: 40, padding: '10px 14px', borderRadius: '14px 14px 4px 14px', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: 14, fontWeight: 500 } : { padding: 14, borderRadius: 14, background: '#111114', border: '1px solid #1e1e24', fontSize: 14, lineHeight: 1.7 }) }}>
               {m.role === 'ai' && <div style={{ fontSize: 10, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Gemini 2.5 Flash</div>}
-              {m.text.split('\n').map((l, j) => <p key={j} style={{ margin: '3px 0' }}>{l}</p>)}
+              {m.role === 'ai'
+                ? <div className="ai-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
+                : m.text.split('\n').map((l, j) => <p key={j} style={{ margin: '3px 0' }}>{l}</p>)
+              }
             </div>
           ))}
           {analyzing && messages.length > 0 && (
@@ -610,7 +713,7 @@ export default function MobileApp(_props: MobileAppProps) {
           <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChat()} placeholder="Takip sorusu sor..." disabled={analyzing}
             style={{ flex: 1, padding: '12px 14px', borderRadius: 12, border: '1px solid #1e1e24', background: '#19191e', color: '#e8e8ec', fontSize: 16, fontFamily: 'inherit', outline: 'none' }} />
           <button onClick={handleChat} disabled={analyzing || !chatInput.trim()}
-            style={{ width: 46, height: 46, borderRadius: 12, border: 'none', background: '#3b82f6', color: '#fff', fontSize: 20, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: analyzing || !chatInput.trim() ? 0.4 : 1 }}>➤</button>
+            style={{ width: 46, height: 46, borderRadius: 12, border: 'none', background: '#3b82f6', color: '#fff', fontSize: 20, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: analyzing || !chatInput.trim() ? 0.4 : 1 }}>{'>'}</button>
         </div>
       </>)}
     </div>
@@ -620,3 +723,5 @@ export default function MobileApp(_props: MobileAppProps) {
 const btnP: React.CSSProperties = { width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: "'Plus Jakarta Sans',sans-serif" };
 const btnS: React.CSSProperties = { width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12, border: '1px solid #2a2a35', background: '#19191e', color: '#e8e8ec', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: "'Plus Jakarta Sans',sans-serif" };
 const floatBtn: React.CSSProperties = { width: 36, height: 36, borderRadius: 10, border: 'none', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', color: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+const mobileLabel: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#9898a8', marginBottom: 3 };
+const mobileInput: React.CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #2a2a35', background: '#19191e', color: '#e8e8ec', fontSize: 14, fontFamily: "'Plus Jakarta Sans',sans-serif", outline: 'none', boxSizing: 'border-box' };
