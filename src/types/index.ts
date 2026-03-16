@@ -36,12 +36,24 @@ export interface GeminiTurn {
 
 // ─── Annotation ───────────────────────────────────────────────────
 
+/** Single annotation entry — one organ/region with its drawings */
+export interface AnnotationEntry {
+  id: string;
+  organId: string;
+  organLabel: string;
+  organIcon: string;
+  color: string;
+  paths: import('../lib/canvasUtils').CanvasPath[][];
+}
+
 export interface AnnotationData {
   organ: string;
   organLabel: string;
   drawingDataUrl: string | null;
   fullImageWithAnnotation: string | null;
   hasDrawing: boolean;
+  /** Multiple annotation entries (multi-organ/multi-drawing) */
+  annotations?: AnnotationEntry[];
 }
 
 export type DrawMode = 'organ' | 'draw';
