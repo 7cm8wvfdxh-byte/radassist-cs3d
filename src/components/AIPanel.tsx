@@ -45,6 +45,24 @@ export default function AIPanel({
 
   const [inputText, setInputText] = useState('');
   const [selectedResponseType, setSelectedResponseType] = useState('report');
+  const [manualModality, setManualModality] = useState('');
+
+  const MODALITY_OPTIONS = [
+    { value: '', label: 'Modalite Sec (opsiyonel)' },
+    { value: 'CR', label: 'Rontgen (CR/DR)' },
+    { value: 'CT', label: 'BT (CT)' },
+    { value: 'MR', label: 'MR' },
+    { value: 'US', label: 'Ultrason (US)' },
+    { value: 'MG', label: 'Mamografi (MG)' },
+    { value: 'NM', label: 'Nukleer Tip (NM)' },
+    { value: 'PT', label: 'PET/CT' },
+    { value: 'XA', label: 'Anjiyografi (XA)' },
+    { value: 'DX', label: 'Dijital Rontgen (DX)' },
+    { value: 'OT', label: 'Diger' },
+  ];
+
+  // Effective modality: DICOM metadata or manual selection
+  const effectiveModality = activeSeries?.modality || manualModality || undefined;
 
   // Auto-trigger analysis when annotation data arrives
   useEffect(() => {
@@ -57,7 +75,7 @@ export default function AIPanel({
         ? (annotationData.drawingDataUrl || annotationData.fullImageWithAnnotation)
         : annotationData.fullImageWithAnnotation;
 
-      const modality = activeSeries?.modality;
+      const modality = effectiveModality;
       const systemPrompt = getSystemPrompt(modality);
 
       // Multi-annotation: build a prompt listing all annotated regions
@@ -125,22 +143,27 @@ export default function AIPanel({
     setAnalyzing(true);
 
     const imageBase64 = await captureViewport();
-    const modality = activeSeries?.modality;
+    const modality = effectiveModality;
     const systemPrompt = getSystemPrompt(modality);
 
     let prompt: string;
     let userMessage: string;
+    const modalityLabel = modality
+      ? MODALITY_OPTIONS.find((m) => m.value === modality)?.label || modality
+      : undefined;
 
     if (viewMode === 'video' && activeVideo) {
       prompt = buildAnalysisPrompt({
+        modality,
         clinicalContext: hasContext() ? clinicalContext : undefined,
       });
-      userMessage = `Goruntu analizi baslatildi (Video: ${activeVideo.name})`;
+      userMessage = `Goruntu analizi baslatildi (Video: ${activeVideo.name}${modalityLabel ? ` | ${modalityLabel}` : ''})`;
     } else if (viewMode === 'photo' && activePhoto) {
       prompt = buildAnalysisPrompt({
+        modality,
         clinicalContext: hasContext() ? clinicalContext : undefined,
       });
-      userMessage = `Goruntu analizi baslatildi (${activePhoto.name})`;
+      userMessage = `Goruntu analizi baslatildi (${activePhoto.name}${modalityLabel ? ` | ${modalityLabel}` : ''})`;
     } else {
       prompt = buildAnalysisPrompt({
         modality,
@@ -179,11 +202,12 @@ export default function AIPanel({
     setAnalyzing(true);
 
     const imageBase64 = hasImages ? await captureViewport() : null;
+    const modality = effectiveModality;
     let context: string;
     if (viewMode === 'video' && activeVideo) {
-      context = `Mevcut goruntu: Video karesi - ${activeVideo.name}`;
+      context = `Mevcut goruntu: Video karesi - ${activeVideo.name}${modality ? ` (Modalite: ${modality})` : ''}`;
     } else if (viewMode === 'photo' && activePhoto) {
-      context = `Mevcut goruntu: Fotograf - ${activePhoto.name}`;
+      context = `Mevcut goruntu: Fotograf - ${activePhoto.name}${modality ? ` (Modalite: ${modality})` : ''}`;
     } else if (activeSeries) {
       context = `Mevcut goruntu: ${activeSeries.modality} - ${activeSeries.description}, Kesit ${imageIndex + 1}/${activeSeries.instanceCount}`;
     } else {
@@ -408,6 +432,42 @@ export default function AIPanel({
                 : activePhoto
                   ? `Fotograf: ${activePhoto.name}`
                   : 'Goruntu yuklendi'}
+          </div>
+        )}
+
+        {/* Manual Modality Selector — for non-DICOM (photo/video) */}
+        {hasImages && !activeSeries?.modality && (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{
+              fontSize: 10, color: 'var(--text-muted)', fontWeight: 600,
+              marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4,
+            }}>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5M14.25 3.104c.251.023.501.05.75.082M19 14.5l-2.47 2.47a3.375 3.375 0 01-4.06.44L12 17.25l-.47.16a3.375 3.375 0 01-4.06-.44L5 14.5" />
+              </svg>
+              Modalite
+            </div>
+            <select
+              value={manualModality}
+              onChange={(e) => setManualModality(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                borderRadius: 6,
+                border: `1px solid ${manualModality ? 'var(--accent)' : 'var(--border)'}`,
+                background: manualModality ? 'var(--accent-glow)' : 'var(--bg-tertiary)',
+                color: manualModality ? 'var(--accent)' : 'var(--text-secondary)',
+                fontSize: 12,
+                fontWeight: manualModality ? 600 : 400,
+                cursor: 'pointer',
+                fontFamily: "'Plus Jakarta Sans', sans-serif",
+                outline: 'none',
+              }}
+            >
+              {MODALITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
           </div>
         )}
 
