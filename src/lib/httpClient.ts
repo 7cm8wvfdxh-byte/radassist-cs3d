@@ -43,6 +43,14 @@ export async function apiFetch<T = unknown>(
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
 
+  // Handle non-JSON responses (e.g. Vercel 413 "Request Entity Too Large")
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const text = await res.text();
+    const errorMsg = text.slice(0, 100) || `HTTP ${res.status}`;
+    throw new Error(errorMsg);
+  }
+
   const data = await res.json() as T;
   return { ok: res.ok, status: res.status, data };
 }

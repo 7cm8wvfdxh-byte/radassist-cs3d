@@ -14,7 +14,7 @@ import {
 import { renderMarkdown } from '../lib/markdownRenderer';
 import {
   captureVideoFrame,
-  fileToBase64,
+  compressImageForAI,
   buildFrameGrid,
   formatTime,
 } from '../lib/mediaCapture';
@@ -102,13 +102,13 @@ export default function MobileApp(_props: MobileAppProps) {
     }
   };
 
-  // BASE64 HELPERS — using shared utilities
+  // BASE64 HELPERS — using shared utilities (compressed for AI)
   const getBase64 = async (): Promise<string | null> => {
     try {
       if (mediaType === 'video' && videoRef.current) {
         return captureVideoFrame(videoRef.current);
       }
-      if (mediaFile) return fileToBase64(mediaFile);
+      if (mediaFile) return compressImageForAI(mediaFile);
       return null;
     } catch { return null; }
   };

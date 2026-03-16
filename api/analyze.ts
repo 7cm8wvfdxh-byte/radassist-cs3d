@@ -7,10 +7,10 @@ export const config = {
   maxDuration: 60,
 };
 
-// Input limits
+// Input limits — Vercel body limit is ~4.5MB, images should be compressed client-side
 const MAX_PROMPT_LENGTH = 10_000;
 const MAX_HISTORY_TURNS = 10;
-const MAX_IMAGE_SIZE_BYTES = 20_000_000; // ~20MB base64
+const MAX_IMAGE_SIZE_BYTES = 4_000_000; // ~4MB base64 (after client-side compression)
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS headers

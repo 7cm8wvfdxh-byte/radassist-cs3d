@@ -28,6 +28,41 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
+/** Max dimension for images sent to AI (keeps quality reasonable, reduces body size) */
+const MAX_AI_IMAGE_DIM = 1536;
+const AI_JPEG_QUALITY = 0.85;
+
+/** Resize and compress an image file to JPEG base64 for AI analysis */
+export function compressImageForAI(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.onload = () => {
+        let { width, height } = img;
+        // Downscale if larger than max
+        if (width > MAX_AI_IMAGE_DIM || height > MAX_AI_IMAGE_DIM) {
+          const scale = MAX_AI_IMAGE_DIM / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('Canvas context failed')); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', AI_JPEG_QUALITY);
+        resolve(dataUrl.split(',')[1]);
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /** Capture the DICOM viewport canvas as base64 */
 export function captureDicomViewport(): string | null {
   try {
@@ -50,7 +85,7 @@ export async function captureCurrentView(opts: {
       return captureVideoFrame(opts.videoRef);
     }
     if (opts.viewMode === 'photo' && opts.activePhoto?.file) {
-      return fileToBase64(opts.activePhoto.file);
+      return compressImageForAI(opts.activePhoto.file);
     }
     return captureDicomViewport();
   } catch {
