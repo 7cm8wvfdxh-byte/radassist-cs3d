@@ -324,88 +324,60 @@ export default function MobileApp(_props: MobileAppProps) {
 
   // RENDER
   return (
-    <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: '#0a0a0c', color: '#e8e8ec', fontFamily: "'Plus Jakarta Sans',sans-serif", overflow: 'hidden' }}>
+    <div className="mobile-app">
 
       {/* HEADER */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid #1e1e24', background: '#111114', flexShrink: 0, zIndex: 5 }}>
-        <div style={{ width: 28, height: 28, borderRadius: 7, background: 'linear-gradient(135deg,#3b82f6,#a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', fontFamily: "'JetBrains Mono',monospace" }}>RA</div>
-        <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>RadAssist</span>
-        {step !== 'capture' && <button onClick={step === 'annotate' ? () => setStep('review') : handleReset} style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #2a2a35', background: 'transparent', color: '#9898a8', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}>{step === 'annotate' ? 'Geri' : 'Yeni'}</button>}
-        <span style={{ fontSize: 10, color: '#606070' }}>{getUser()}</span>
+      <div className="mobile-header">
+        <div className="mobile-logo">RA</div>
+        <span className="mobile-title">RadAssist</span>
+        {step !== 'capture' && (
+          <button onClick={step === 'annotate' ? () => setStep('review') : handleReset} className="mobile-btn-back">
+            {step === 'annotate' ? 'Geri' : 'Yeni'}
+          </button>
+        )}
+        <span className="mobile-user">{getUser()}</span>
       </div>
 
       {/* CAPTURE */}
       {step === 'capture' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div className="mobile-capture">
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleFileSelect} />
           <input ref={galleryRef} type="file" accept="image/*,video/*,.dcm" style={{ display: 'none' }} onChange={handleFileSelect} />
-          <div style={{ fontSize: 48, marginBottom: 16 }}>{'<_>'}</div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, textAlign: 'center' }}>Goruntu veya Video Yukle</h2>
-          <p style={{ fontSize: 14, color: '#9898a8', marginBottom: 32, textAlign: 'center' }}>Fotograf cekin, galeriden secin veya video yukleyin</p>
-          <button onClick={() => cameraRef.current?.click()} style={{ ...btnP, marginBottom: 12 }}>Fotograf Cek</button>
-          <button onClick={() => galleryRef.current?.click()} style={btnS}>Galeri / Video Sec</button>
-          {/* Disclaimer */}
-          <div style={{ marginTop: 32, padding: '10px 16px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)', fontSize: 11, color: '#d97706', lineHeight: 1.5, maxWidth: 340, textAlign: 'center' }}>
-            {MEDICAL_DISCLAIMER}
-          </div>
+          <div className="mobile-capture-icon">{'<_>'}</div>
+          <h2>Goruntu veya Video Yukle</h2>
+          <p>Fotograf cekin, galeriden secin veya video yukleyin</p>
+          <button onClick={() => cameraRef.current?.click()} className="mobile-btn-primary" style={{ marginBottom: 12 }}>Fotograf Cek</button>
+          <button onClick={() => galleryRef.current?.click()} className="mobile-btn-secondary">Galeri / Video Sec</button>
+          <div className="mobile-disclaimer">{MEDICAL_DISCLAIMER}</div>
         </div>
       )}
 
       {/* REVIEW */}
       {step === 'review' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <div className="mobile-review">
           {/* Media */}
           <div
             ref={videoContainerRef}
-            style={{
-              width: '100%',
-              ...(isFullscreen
-                ? { height: '100%', maxHeight: 'none' }
-                : { aspectRatio: '16/10', maxHeight: '40vh' }),
-              background: '#000', flexShrink: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              position: 'relative',
-            }}
+            className={`mobile-media-container ${isFullscreen ? 'fullscreen' : ''}`}
           >
             {mediaType === 'image'
-              ? <img src={mediaUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              : <video ref={videoRef} src={mediaUrl} controls playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              ? <img src={mediaUrl} alt="" />
+              : <video ref={videoRef} src={mediaUrl} controls playsInline />
             }
 
             {mediaType === 'video' && (
-              <div style={{
-                position: 'absolute', bottom: isFullscreen ? 60 : 8, left: 0, right: 0,
-                display: 'flex', justifyContent: 'center', gap: 8,
-                padding: '0 16px', zIndex: 10,
-              }}>
-                <button onClick={captureFrame} style={{
-                  padding: '10px 20px', borderRadius: 12,
-                  border: 'none', background: 'rgba(6,182,212,0.9)',
-                  backdropFilter: 'blur(8px)',
-                  color: '#fff', fontSize: 14, fontWeight: 700,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  boxShadow: '0 2px 12px rgba(6,182,212,0.4)',
-                }}>
+              <div className={`mobile-video-controls ${isFullscreen ? 'fullscreen' : ''}`}>
+                <button onClick={captureFrame} className="mobile-btn-capture-frame">
                   Kare Yakala {frames.length > 0 ? `(${frames.length})` : ''}
                 </button>
-                <button onClick={toggleFullscreen} style={{
-                  padding: '10px 14px', borderRadius: 12,
-                  border: 'none', background: 'rgba(255,255,255,0.15)',
-                  backdropFilter: 'blur(8px)',
-                  color: '#fff', fontSize: 14, cursor: 'pointer',
-                }}>
+                <button onClick={toggleFullscreen} className="mobile-btn-fullscreen">
                   {isFullscreen ? '[-]' : '[+]'}
                 </button>
               </div>
             )}
 
             {mediaType === 'video' && isFullscreen && frames.length > 0 && (
-              <div style={{
-                position: 'absolute', top: 16, right: 16,
-                padding: '6px 14px', borderRadius: 10,
-                background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
-                color: '#06b6d4', fontSize: 13, fontWeight: 700, zIndex: 10,
-              }}>
+              <div className="mobile-frame-badge">
                 {frames.length} kare yakalandi
               </div>
             )}
@@ -413,13 +385,17 @@ export default function MobileApp(_props: MobileAppProps) {
 
           {/* Video frame thumbnails */}
           {mediaType === 'video' && frames.length > 0 && (
-            <div style={{ padding: '8px 16px', borderBottom: '1px solid #1e1e24', background: '#111114', flexShrink: 0 }}>
-              <div ref={framesRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2 }}>
+            <div className="mobile-frames-strip">
+              <div ref={framesRef} className="mobile-frames-scroll">
                 {frames.map((f) => (
-                  <div key={f.id} onClick={() => setFrames((p) => p.map((x) => x.id === f.id ? { ...x, selected: !x.selected } : x))} style={{ position: 'relative', flexShrink: 0, width: 64, borderRadius: 8, overflow: 'hidden', border: `2px solid ${f.selected ? '#3b82f6' : '#1e1e24'}`, opacity: f.selected ? 1 : 0.4 }}>
-                    <img src={f.thumbnailUrl} alt="" style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
-                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center', background: 'rgba(0,0,0,0.7)', fontSize: 8, color: '#999', padding: 1 }}>{formatTime(f.timestamp)}</div>
-                    {f.selected && <div style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>+</div>}
+                  <div
+                    key={f.id}
+                    onClick={() => setFrames((p) => p.map((x) => x.id === f.id ? { ...x, selected: !x.selected } : x))}
+                    className={`mobile-frame-thumb ${f.selected ? 'selected' : 'unselected'}`}
+                  >
+                    <img src={f.thumbnailUrl} alt="" />
+                    <div className="mobile-frame-time">{formatTime(f.timestamp)}</div>
+                    {f.selected && <div className="mobile-frame-check">+</div>}
                   </div>
                 ))}
               </div>
@@ -430,29 +406,22 @@ export default function MobileApp(_props: MobileAppProps) {
           <div style={{ padding: '8px 16px 0' }}>
             <button
               onClick={() => setShowContext(!showContext)}
-              style={{
-                width: '100%', padding: '8px 12px', borderRadius: 10,
-                border: `1px solid ${hasContext() ? 'rgba(34,197,94,0.3)' : '#1e1e24'}`,
-                background: hasContext() ? 'rgba(34,197,94,0.08)' : '#111114',
-                color: hasContext() ? '#22c55e' : '#9898a8',
-                fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              }}
+              className={`mobile-context-toggle ${hasContext() ? 'active' : 'inactive'}`}
             >
               <span>{hasContext() ? 'Klinik Bilgi (aktif)' : 'Klinik Bilgi Ekle (opsiyonel)'}</span>
               <span style={{ fontSize: 10 }}>{showContext ? 'v' : '>'}</span>
             </button>
 
             {showContext && (
-              <div style={{ marginTop: 8, padding: 12, borderRadius: 10, background: '#111114', border: '1px solid #1e1e24', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8 }}>
+              <div className="mobile-context-form">
+                <div className="mobile-context-row">
                   <div style={{ flex: 1 }}>
-                    <div style={mobileLabel}>Yas</div>
-                    <input type="text" placeholder="45" value={clinicalContext.age} onChange={(e) => setClinicalContext({ ...clinicalContext, age: e.target.value })} style={mobileInput} />
+                    <div className="mobile-label">Yas</div>
+                    <input type="text" placeholder="45" value={clinicalContext.age} onChange={(e) => setClinicalContext({ ...clinicalContext, age: e.target.value })} className="mobile-input" />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={mobileLabel}>Cinsiyet</div>
-                    <select value={clinicalContext.gender} onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as 'male' | 'female' | '' })} style={mobileInput}>
+                    <div className="mobile-label">Cinsiyet</div>
+                    <select value={clinicalContext.gender} onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as 'male' | 'female' | '' })} className="mobile-input">
                       <option value="">-</option>
                       <option value="male">Erkek</option>
                       <option value="female">Kadin</option>
@@ -460,37 +429,43 @@ export default function MobileApp(_props: MobileAppProps) {
                   </div>
                 </div>
                 <div>
-                  <div style={mobileLabel}>Sikayet</div>
-                  <input type="text" placeholder="bas agrisi, karin agrisi..." value={clinicalContext.complaint} onChange={(e) => setClinicalContext({ ...clinicalContext, complaint: e.target.value })} style={mobileInput} />
+                  <div className="mobile-label">Sikayet</div>
+                  <input type="text" placeholder="bas agrisi, karin agrisi..." value={clinicalContext.complaint} onChange={(e) => setClinicalContext({ ...clinicalContext, complaint: e.target.value })} className="mobile-input" />
                 </div>
                 <div>
-                  <div style={mobileLabel}>Ozgecmis</div>
-                  <input type="text" placeholder="DM, HT, bilinen kitle..." value={clinicalContext.history} onChange={(e) => setClinicalContext({ ...clinicalContext, history: e.target.value })} style={mobileInput} />
+                  <div className="mobile-label">Ozgecmis</div>
+                  <input type="text" placeholder="DM, HT, bilinen kitle..." value={clinicalContext.history} onChange={(e) => setClinicalContext({ ...clinicalContext, history: e.target.value })} className="mobile-input" />
                 </div>
                 <div>
-                  <div style={mobileLabel}>Klinik Soru</div>
-                  <input type="text" placeholder="metastaz? lezyon karakteri?" value={clinicalContext.clinicalQuestion} onChange={(e) => setClinicalContext({ ...clinicalContext, clinicalQuestion: e.target.value })} style={mobileInput} />
+                  <div className="mobile-label">Klinik Soru</div>
+                  <input type="text" placeholder="metastaz? lezyon karakteri?" value={clinicalContext.clinicalQuestion} onChange={(e) => setClinicalContext({ ...clinicalContext, clinicalQuestion: e.target.value })} className="mobile-input" />
                 </div>
               </div>
             )}
           </div>
 
           {/* Organ picker */}
-          <div style={{ padding: '12px 16px' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#9898a8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Bolge / Organ</div>
-            <div style={{ display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 8 }}>
+          <div className="mobile-organ-section">
+            <div className="mobile-section-label">Bolge / Organ</div>
+            <div className="mobile-organ-scroll">
               {ORGAN_TREE.map((cat) => (
-                <button key={cat.id} onClick={() => { setSelectedCategory(selectedCategory?.id === cat.id ? null : cat); if (cat.id === 'general') setSelectedStructure('general_full'); }}
-                  style={{ flexShrink: 0, padding: '8px 12px', borderRadius: 10, border: `1.5px solid ${selectedCategory?.id === cat.id || (cat.id === 'general' && selectedStructure === 'general_full') ? '#3b82f6' : '#1e1e24'}`, background: selectedCategory?.id === cat.id ? 'rgba(59,130,246,0.15)' : '#111114', color: selectedCategory?.id === cat.id ? '#60a5fa' : '#9898a8', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
-                  <span style={{ fontSize: 16 }}>{cat.icon}</span>{cat.label}
+                <button
+                  key={cat.id}
+                  onClick={() => { setSelectedCategory(selectedCategory?.id === cat.id ? null : cat); if (cat.id === 'general') setSelectedStructure('general_full'); }}
+                  className={`mobile-organ-btn ${selectedCategory?.id === cat.id || (cat.id === 'general' && selectedStructure === 'general_full') ? 'selected' : 'unselected'}`}
+                >
+                  <span className="mobile-organ-icon">{cat.icon}</span>{cat.label}
                 </button>
               ))}
             </div>
             {selectedCategory && selectedCategory.id !== 'general' && (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              <div className="mobile-structure-wrap">
                 {selectedCategory.structures.map((s) => (
-                  <button key={s.id} onClick={() => setSelectedStructure(s.id)}
-                    style={{ padding: '6px 12px', borderRadius: 8, border: `1px solid ${selectedStructure === s.id ? '#06b6d4' : '#1e1e24'}`, background: selectedStructure === s.id ? 'rgba(6,182,212,0.15)' : 'transparent', color: selectedStructure === s.id ? '#22d3ee' : '#9898a8', fontSize: 11, fontWeight: selectedStructure === s.id ? 700 : 400, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  <button
+                    key={s.id}
+                    onClick={() => setSelectedStructure(s.id)}
+                    className={`mobile-structure-btn ${selectedStructure === s.id ? 'selected' : 'unselected'}`}
+                  >
                     {s.label}
                   </button>
                 ))}
@@ -499,18 +474,21 @@ export default function MobileApp(_props: MobileAppProps) {
           </div>
 
           {/* Action buttons */}
-          <div style={{ padding: '10px 16px', marginTop: 'auto', borderTop: '1px solid #1e1e24', background: '#0a0a0c', position: 'sticky', bottom: 0, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button onClick={() => { setStep('annotate'); setPaths([]); setAnnotationLabel(''); setTimeout(initAnnotationCanvas, 100); }}
-              style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1.5px solid #f59e0b', background: 'rgba(245,158,11,0.1)', color: '#fbbf24', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <div className="mobile-actions">
+            <button
+              onClick={() => { setStep('annotate'); setPaths([]); setAnnotationLabel(''); setTimeout(initAnnotationCanvas, 100); }}
+              className="mobile-btn-annotate"
+            >
               Bolge Isaretle + Etiketle
             </button>
-            <button onClick={selectedStructure === 'general_full' ? handleGeneralAnalyze : handleStructureAnalyze}
-              style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <button
+              onClick={selectedStructure === 'general_full' ? handleGeneralAnalyze : handleStructureAnalyze}
+              className="mobile-btn-analyze"
+            >
               {selectedStructure === 'general_full' ? 'Genel Analiz' : `${structureLabel} Analiz Et`}
             </button>
             {mediaType === 'video' && selCount > 0 && (
-              <button onClick={handleMultiFrameAnalyze}
-                style={{ width: '100%', padding: '13px 0', borderRadius: 12, border: '1.5px solid #06b6d4', background: 'rgba(6,182,212,0.1)', color: '#06b6d4', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <button onClick={handleMultiFrameAnalyze} className="mobile-btn-multiframe">
                 {selCount} Kareyi Toplu Analiz
               </button>
             )}
@@ -520,45 +498,45 @@ export default function MobileApp(_props: MobileAppProps) {
 
       {/* ANNOTATE */}
       {step === 'annotate' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ flex: 1, position: 'relative', background: '#000', touchAction: 'none' }}>
+        <div className="mobile-annotate">
+          <div className="mobile-canvas-area">
             <canvas ref={canvasRef}
-              style={{ width: '100%', height: '100%', cursor: 'crosshair', touchAction: 'none' }}
               onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
               onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
             />
             {paths.length === 0 && (
-              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none', color: '#606070', fontSize: 13 }}>
+              <div className="mobile-canvas-hint">
                 Parmaginizla cizin
               </div>
             )}
-            <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: 6 }}>
+            <div className="mobile-canvas-tools">
               {paths.length > 0 && <>
-                <button onClick={() => setPaths((p) => p.slice(0, -1))} style={floatBtn}>{'<-'}</button>
-                <button onClick={() => setPaths([])} style={floatBtn}>X</button>
+                <button onClick={() => setPaths((p) => p.slice(0, -1))} className="mobile-float-btn">{'<-'}</button>
+                <button onClick={() => setPaths([])} className="mobile-float-btn">X</button>
               </>}
             </div>
             {paths.length > 0 && (
-              <div style={{ position: 'absolute', top: 10, left: 10, padding: '4px 10px', borderRadius: 8, background: 'rgba(239,68,68,0.2)', color: '#f87171', fontSize: 11, fontWeight: 600 }}>
+              <div className="mobile-path-count">
                 {paths.length} cizim
               </div>
             )}
           </div>
 
-          <div style={{ padding: '12px 16px', background: '#111114', borderTop: '1px solid #1e1e24', flexShrink: 0 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#9898a8', marginBottom: 6 }}>
+          <div className="mobile-annotate-footer">
+            <label>
               Bu isaretli alan ne? (AI'a soyle)
-            </div>
+            </label>
             <input
               value={annotationLabel}
               onChange={(e) => setAnnotationLabel(e.target.value)}
               placeholder="Orn: sol bobrek alt pol kisti, mezenterik LAP..."
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #2a2a35', background: '#19191e', color: '#e8e8ec', fontSize: 15, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', marginBottom: 10 }}
+              className="mobile-annotate-input"
             />
             <button
               onClick={handleAnnotatedAnalyze}
               disabled={paths.length === 0}
-              style={{ width: '100%', padding: '14px 0', borderRadius: 12, border: 'none', background: paths.length > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#333', color: '#fff', fontSize: 15, fontWeight: 700, cursor: paths.length > 0 ? 'pointer' : 'default', fontFamily: 'inherit', opacity: paths.length > 0 ? 1 : 0.4 }}>
+              className={`mobile-btn-analyze-annotated ${paths.length > 0 ? 'enabled' : 'disabled'}`}
+            >
               Isaretli Bolgeyi Analiz Et
             </button>
           </div>
@@ -567,37 +545,37 @@ export default function MobileApp(_props: MobileAppProps) {
 
       {/* RESULT */}
       {step === 'result' && (<>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', background: '#111114', borderBottom: '1px solid #1e1e24', flexShrink: 0 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 8, overflow: 'hidden', background: '#19191e', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="mobile-result-header">
+          <div className="mobile-result-thumb">
             {mediaType === 'image'
-              ? <img src={mediaUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ? <img src={mediaUrl} alt="" />
               : <span style={{ fontSize: 14, fontFamily: "'JetBrains Mono',monospace" }}>VID</span>}
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{structureLabel} Analizi</div>
-            <div style={{ fontSize: 11, color: '#606070' }}>{analyzing ? 'Analiz ediliyor...' : 'Tamamlandi'}</div>
+          <div className="mobile-result-info">
+            <div className="mobile-result-title">{structureLabel} Analizi</div>
+            <div className="mobile-result-status">{analyzing ? 'Analiz ediliyor...' : 'Tamamlandi'}</div>
           </div>
-          <div style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: 'rgba(6,182,212,0.15)', color: '#06b6d4', fontWeight: 600 }}>Gemini</div>
+          <div className="mobile-gemini-badge">Gemini</div>
         </div>
 
         {/* Disclaimer in result */}
-        <div style={{ padding: '6px 16px', background: '#0a0a0c', flexShrink: 0 }}>
-          <div style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.06)', fontSize: 9, color: '#92400e', lineHeight: 1.4 }}>
+        <div className="mobile-result-disclaimer">
+          <div className="mobile-result-disclaimer-text">
             {MEDICAL_DISCLAIMER}
           </div>
         </div>
 
         {/* Messages */}
-        <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: 16, minHeight: 0 }}>
+        <div className="mobile-messages">
           {analyzing && messages.length === 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 40, gap: 12, color: '#606070' }}>
-              <div style={{ width: 24, height: 24, border: '2.5px solid #2a2a35', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              <div className="mobile-loading-spinner" />
               <span style={{ fontSize: 13 }}>Gemini analiz ediyor...</span>
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} style={{ marginBottom: 12, ...(m.role === 'user' ? { marginLeft: 40, padding: '10px 14px', borderRadius: '14px 14px 4px 14px', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: 14, fontWeight: 500 } : { padding: 14, borderRadius: 14, background: '#111114', border: '1px solid #1e1e24', fontSize: 14, lineHeight: 1.7 }) }}>
-              {m.role === 'ai' && <div style={{ fontSize: 10, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Gemini 2.5 Flash</div>}
+            <div key={i} className={m.role === 'user' ? 'mobile-msg-user' : 'mobile-msg-ai'}>
+              {m.role === 'ai' && <div className="mobile-msg-ai-label">Gemini 2.5 Flash</div>}
               {m.role === 'ai'
                 ? <div className="ai-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
                 : m.text.split('\n').map((l, j) => <p key={j} style={{ margin: '3px 0' }}>{l}</p>)
@@ -606,26 +584,31 @@ export default function MobileApp(_props: MobileAppProps) {
           ))}
           {analyzing && messages.length > 0 && (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 12 }}>
-              <div style={{ width: 20, height: 20, border: '2px solid #2a2a35', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              <div className="mobile-loading-small" />
             </div>
           )}
           <div ref={resultEndRef} />
         </div>
 
         {/* Chat */}
-        <div style={{ display: 'flex', gap: 8, padding: '10px 16px', borderTop: '1px solid #1e1e24', background: '#111114', flexShrink: 0 }}>
-          <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleChat()} placeholder="Takip sorusu sor..." disabled={analyzing}
-            style={{ flex: 1, padding: '12px 14px', borderRadius: 12, border: '1px solid #1e1e24', background: '#19191e', color: '#e8e8ec', fontSize: 16, fontFamily: 'inherit', outline: 'none' }} />
-          <button onClick={handleChat} disabled={analyzing || !chatInput.trim()}
-            style={{ width: 46, height: 46, borderRadius: 12, border: 'none', background: '#3b82f6', color: '#fff', fontSize: 20, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: analyzing || !chatInput.trim() ? 0.4 : 1 }}>{'>'}</button>
+        <div className="mobile-chat-bar">
+          <input
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleChat()}
+            placeholder="Takip sorusu sor..."
+            disabled={analyzing}
+            className="mobile-chat-input"
+          />
+          <button
+            onClick={handleChat}
+            disabled={analyzing || !chatInput.trim()}
+            className="mobile-chat-send"
+          >
+            {'>'}
+          </button>
         </div>
       </>)}
     </div>
   );
 }
-
-const btnP: React.CSSProperties = { width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: "'Plus Jakarta Sans',sans-serif" };
-const btnS: React.CSSProperties = { width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12, border: '1px solid #2a2a35', background: '#19191e', color: '#e8e8ec', fontSize: 16, fontWeight: 600, cursor: 'pointer', fontFamily: "'Plus Jakarta Sans',sans-serif" };
-const floatBtn: React.CSSProperties = { width: 36, height: 36, borderRadius: 10, border: 'none', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', color: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
-const mobileLabel: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#9898a8', marginBottom: 3 };
-const mobileInput: React.CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #2a2a35', background: '#19191e', color: '#e8e8ec', fontSize: 14, fontFamily: "'Plus Jakarta Sans',sans-serif", outline: 'none', boxSizing: 'border-box' };
