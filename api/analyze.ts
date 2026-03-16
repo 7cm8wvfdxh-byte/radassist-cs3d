@@ -12,6 +12,12 @@ const MAX_PROMPT_LENGTH = 10_000;
 const MAX_HISTORY_TURNS = 10;
 const MAX_IMAGE_SIZE_BYTES = 4_000_000; // ~4MB base64 (after client-side compression)
 
+// Model fallback chain: try 2.5-flash first, then 2.0-flash on quota error
+const MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+];
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -25,9 +31,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
-
-  // Auth check — accept any request (login gate removed)
-  // Token still sent by client for backwards compat but not enforced
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -55,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (imageBase64 && typeof imageBase64 === 'string') {
       currentParts.push({
         inlineData: {
-          mimeType: 'image/png',
+          mimeType: 'image/jpeg',
           data: imageBase64,
         },
       });
@@ -65,7 +68,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Build contents array with conversation history
     const contents: Array<{ role: string; parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }> = [];
 
-    // Add previous conversation turns (if any)
     if (Array.isArray(history) && history.length > 0) {
       const recentHistory = history.slice(-MAX_HISTORY_TURNS);
       for (const turn of recentHistory) {
@@ -78,7 +80,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Add current user message
     contents.push({
       role: 'user',
       parts: currentParts,
@@ -102,30 +103,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
     }
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    // Try models in order — fallback on quota/rate limit errors
+    let lastError = '';
+    let usedModel = '';
+
+    for (const model of MODELS) {
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      );
+
+      const data = await geminiRes.json();
+
+      if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+        usedModel = model;
+        return res.status(200).json({
+          text: data.candidates[0].content.parts[0].text,
+          model: usedModel,
+        });
       }
-    );
 
-    const data = await geminiRes.json();
+      if (data.error) {
+        const msg = data.error.message || '';
+        const isQuotaError = msg.includes('quota') || msg.includes('rate') ||
+          msg.includes('RESOURCE_EXHAUSTED') || geminiRes.status === 429;
 
-    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-      return res.status(200).json({
-        text: data.candidates[0].content.parts[0].text,
-      });
+        if (isQuotaError && model !== MODELS[MODELS.length - 1]) {
+          // Quota exceeded — try next model
+          console.log(`${model} quota exceeded, falling back to next model...`);
+          lastError = msg;
+          continue;
+        }
+
+        console.error(`Gemini API error (${model}):`, msg);
+        lastError = msg;
+      } else {
+        lastError = 'No response from Gemini';
+      }
     }
 
-    if (data.error) {
-      const geminiMsg = data.error.message || JSON.stringify(data.error);
-      console.error('Gemini API error:', geminiMsg);
-      return res.status(500).json({ error: `AI servisi hatasi: ${geminiMsg}` });
-    }
-
-    return res.status(500).json({ error: 'No response from Gemini' });
+    return res.status(500).json({ error: `AI servisi hatasi: ${lastError}` });
   } catch {
     return res.status(500).json({ error: 'Sunucu hatasi — tekrar deneyin' });
   }
