@@ -54,7 +54,18 @@ export async function analyzeWithGemini(opts: {
     if (result.data.error) return `Hata: ${result.data.error}`;
     return 'Yanit alinamadi.';
   } catch (err) {
-    return `Baglanti hatasi: ${(err as Error).message}`;
+    const msg = (err as Error).message || '';
+    // Common error patterns with user-friendly messages
+    if (msg.includes('Request Entity Too Large') || msg.includes('413')) {
+      return 'Hata: Goruntu cok buyuk. Daha kucuk bir goruntu deneyin.';
+    }
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      return 'Hata: Internet baglantisi yok veya sunucuya ulasilamiyor.';
+    }
+    if (msg.includes('401') || msg.includes('Unauthorized')) {
+      return 'Hata: Oturum suresi dolmus. Sayfayi yenileyin.';
+    }
+    return `Baglanti hatasi: ${msg}`;
   }
 }
 
