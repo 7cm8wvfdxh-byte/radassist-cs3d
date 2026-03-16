@@ -17,6 +17,7 @@ import type { AnnotationData } from './components/AnnotationOverlay';
 import AIPanel from './components/AIPanel';
 import PasswordGate from './components/PasswordGate';
 import BugReport from './components/BugReport';
+import MobileApp from './components/MobileApp';
 
 interface SeriesInfo {
   seriesUID: string;
@@ -477,6 +478,11 @@ export default function App() {
   // Password gate
   if (!authenticated) {
     return <PasswordGate onAuthenticated={() => setAuthenticated(true)} />;
+  }
+
+  // Mobile: simplified UI
+  if (isMobile) {
+    return <MobileApp onSwitchToDesktop={() => setIsMobile(false)} />;
   }
 
   return (
