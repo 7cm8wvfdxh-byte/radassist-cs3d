@@ -8,6 +8,8 @@ import {
   getSystemPrompt,
   buildAnalysisPrompt,
   getScoringHint,
+  getResponseTypeInstruction,
+  RESPONSE_TYPES,
   MEDICAL_DISCLAIMER,
 } from '../lib/promptTemplates';
 import { renderMarkdown } from '../lib/markdownRenderer';
@@ -42,6 +44,7 @@ export default function AIPanel({
   } = useClinicalContext();
 
   const [inputText, setInputText] = useState('');
+  const [selectedResponseType, setSelectedResponseType] = useState('report');
 
   // Auto-trigger analysis when annotation data arrives
   useEffect(() => {
@@ -66,7 +69,8 @@ export default function AIPanel({
       });
 
       const scoringHint = getScoringHint(annotationData.organ, modality);
-      const fullPrompt = scoringHint ? `${prompt}\n\n${scoringHint}` : prompt;
+      const responseInstruction = getResponseTypeInstruction(selectedResponseType);
+      const fullPrompt = (scoringHint ? `${prompt}\n\n${scoringHint}` : prompt) + responseInstruction;
 
       const regionInfo = annotationData.hasDrawing
         ? `Isaretlenmis bolge (${annotationData.organLabel})`
@@ -130,11 +134,15 @@ export default function AIPanel({
       userMessage = `Goruntu analizi baslatildi (${modality || 'DICOM'} - Kesit ${imageIndex + 1})`;
     }
 
-    addUserMessage(userMessage);
+    const responseInstruction = getResponseTypeInstruction(selectedResponseType);
+    const fullPrompt = prompt + responseInstruction;
+
+    const responseLabel = RESPONSE_TYPES.find((r) => r.id === selectedResponseType)?.label;
+    addUserMessage(`${userMessage} [${responseLabel}]`);
 
     const history = buildConversationHistory(messages);
     const result = await analyzeWithGemini({
-      prompt,
+      prompt: fullPrompt,
       imageBase64,
       systemPrompt,
       history,
@@ -371,6 +379,48 @@ export default function AIPanel({
             {activeSeries.description && ` | ${activeSeries.description}`}
           </div>
         )}
+
+        {/* Response Type Selector */}
+        <div style={{ marginBottom: 8 }}>
+          <div style={{
+            fontSize: 10, color: 'var(--text-muted)', fontWeight: 600,
+            marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            Yanit Tipi
+          </div>
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 4,
+          }}>
+            {RESPONSE_TYPES.map((rt) => (
+              <button
+                key={rt.id}
+                onClick={() => setSelectedResponseType(rt.id)}
+                title={rt.description}
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: `1px solid ${selectedResponseType === rt.id ? 'var(--accent)' : 'var(--border)'}`,
+                  background: selectedResponseType === rt.id ? 'var(--accent-glow)' : 'var(--bg-tertiary)',
+                  color: selectedResponseType === rt.id ? 'var(--accent)' : 'var(--text-secondary)',
+                  fontSize: 11,
+                  fontWeight: selectedResponseType === rt.id ? 600 : 400,
+                  cursor: 'pointer',
+                  fontFamily: "'Plus Jakarta Sans', sans-serif",
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <span style={{ fontSize: 12 }}>{rt.icon}</span>
+                {rt.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Analyze button */}
         <button

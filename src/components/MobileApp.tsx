@@ -6,6 +6,8 @@ import type { CapturedFrame } from '../types';
 import {
   getSystemPrompt,
   getScoringHint,
+  getResponseTypeInstruction,
+  RESPONSE_TYPES,
   MEDICAL_DISCLAIMER,
   buildClinicalContextString,
 } from '../lib/promptTemplates';
@@ -44,6 +46,11 @@ export default function MobileApp(_props: MobileAppProps) {
 
   // Video frames
   const [frames, setFrames] = useState<CapturedFrame[]>([]);
+
+  // Modality selection (fixes missing modality awareness)
+  const [selectedModality, setSelectedModality] = useState('');
+  // Response type selection
+  const [selectedResponseType, setSelectedResponseType] = useState('report');
 
   // AI
   const [analyzing, setAnalyzing] = useState(false);
@@ -174,9 +181,9 @@ export default function MobileApp(_props: MobileAppProps) {
     return canvasRef.current.toDataURL('image/png').split(',')[1];
   };
 
-  // AI CALL — using shared geminiClient
+  // AI CALL — using shared geminiClient with modality-aware system prompt
   const callAI = async (prompt: string, base64: string | null): Promise<string> => {
-    const systemPrompt = getSystemPrompt();
+    const systemPrompt = getSystemPrompt(selectedModality || undefined);
     const history = buildConversationHistorySimple(messages);
     return analyzeWithGemini({
       prompt,
@@ -205,8 +212,10 @@ export default function MobileApp(_props: MobileAppProps) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
-    const scoringHint = selectedCategory ? getScoringHint(selectedCategory.id) : null;
+    const scoringHint = selectedCategory ? getScoringHint(selectedCategory.id, selectedModality || undefined) : null;
     if (scoringHint) prompt += `\n\n${scoringHint}`;
+    if (selectedModality) prompt += `\nModalite: ${selectedModality}`;
+    prompt += getResponseTypeInstruction(selectedResponseType);
 
     const text = await callAI(prompt, base64);
     setMessages([{ role: 'ai', text }]);
@@ -222,8 +231,10 @@ export default function MobileApp(_props: MobileAppProps) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
-    const scoringHint = getScoringHint(selectedStructure);
+    const scoringHint = getScoringHint(selectedStructure, selectedModality || undefined);
     if (scoringHint) prompt += `\n\n${scoringHint}`;
+    if (selectedModality) prompt += `\nModalite: ${selectedModality}`;
+    prompt += getResponseTypeInstruction(selectedResponseType);
 
     const text = await callAI(prompt, base64);
     setMessages([{ role: 'ai', text }]);
@@ -240,8 +251,10 @@ export default function MobileApp(_props: MobileAppProps) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
-    const scoringHint = getScoringHint(selectedStructure);
+    const scoringHint = getScoringHint(selectedStructure, selectedModality || undefined);
     if (scoringHint) prompt += `\n\n${scoringHint}`;
+    if (selectedModality) prompt += `\nModalite: ${selectedModality}`;
+    prompt += getResponseTypeInstruction(selectedResponseType);
 
     const text = await callAI(prompt, base64);
     setMessages([{ role: 'user', text: `Isaretli bolge: "${label}"` }, { role: 'ai', text }]);
@@ -265,6 +278,8 @@ export default function MobileApp(_props: MobileAppProps) {
     if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
+    if (selectedModality) prompt += `\nModalite: ${selectedModality}`;
+    prompt += getResponseTypeInstruction(selectedResponseType);
 
     setMessages([{
       role: 'user',
@@ -293,6 +308,7 @@ export default function MobileApp(_props: MobileAppProps) {
     setMediaUrl(''); setMediaFile(null); setStep('capture');
     setMessages([]); setFrames([]); setPaths([]);
     setSelectedCategory(null); setSelectedStructure('general_full');
+    setSelectedModality(''); setSelectedResponseType('report');
     setAnnotationLabel(''); setBaseImage(null);
   };
 
@@ -418,6 +434,48 @@ export default function MobileApp(_props: MobileAppProps) {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Modality selector */}
+          <div style={{ padding: '4px 16px 0' }}>
+            <div className="mobile-section-label">Modalite</div>
+            <div className="mobile-organ-scroll">
+              {[
+                { id: '', label: 'Otomatik' },
+                { id: 'CT', label: 'BT' },
+                { id: 'MR', label: 'MR' },
+                { id: 'CR', label: 'Röntgen' },
+                { id: 'US', label: 'US' },
+                { id: 'MG', label: 'Mamografi' },
+                { id: 'NM', label: 'Nükleer' },
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setSelectedModality(m.id)}
+                  className={`mobile-organ-btn ${selectedModality === m.id ? 'selected' : 'unselected'}`}
+                  style={{ minWidth: 'auto', padding: '6px 10px' }}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Response type selector */}
+          <div style={{ padding: '4px 16px 0' }}>
+            <div className="mobile-section-label">Yanit Tipi</div>
+            <div className="mobile-organ-scroll">
+              {RESPONSE_TYPES.map((rt) => (
+                <button
+                  key={rt.id}
+                  onClick={() => setSelectedResponseType(rt.id)}
+                  className={`mobile-organ-btn ${selectedResponseType === rt.id ? 'selected' : 'unselected'}`}
+                  style={{ minWidth: 'auto', padding: '6px 10px' }}
+                >
+                  <span style={{ marginRight: 3 }}>{rt.icon}</span>{rt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Organ picker */}

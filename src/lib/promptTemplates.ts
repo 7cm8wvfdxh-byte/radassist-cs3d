@@ -239,5 +239,98 @@ export function getScoringHint(organId: string, modality?: string): string | nul
   return null;
 }
 
+// ─── Response Type System ───────────────────────────────────────────
+// Lets radiologists choose what kind of AI response they want
+
+export interface ResponseType {
+  id: string;
+  label: string;
+  icon: string;
+  description: string;
+  promptInstruction: string;
+}
+
+export const RESPONSE_TYPES: ResponseType[] = [
+  {
+    id: 'findings',
+    label: 'Bulgu',
+    icon: '🔍',
+    description: 'Sadece bulgular',
+    promptInstruction: `YANITINI SADECE BULGULAR (FINDINGS) OLARAK VER:
+- Sistematik sırayla tüm bulguları listele
+- Her bulgu için: lokalizasyon, boyut (varsa), morfoloji, sinyal/dansite özellikleri
+- Normal yapıları kısaca "doğal" olarak belirt
+- Yorum veya öneri ekleme, sadece objektif bulgular yaz`,
+  },
+  {
+    id: 'report',
+    label: 'Rapor',
+    icon: '📋',
+    description: 'Yapılandırılmış rapor',
+    promptInstruction: `TAM YAPILANDIRILMIŞ RADYOLOJİ RAPORU HAZIRLA:
+## TEKNİK
+## BULGULAR
+## SONUÇ / İZLENİM
+## ÖNERİ
+Her bölümü detaylı doldur. Standart radyoloji rapor formatını kullan.`,
+  },
+  {
+    id: 'differential',
+    label: 'Ayırıcı Tanı',
+    icon: '🧬',
+    description: 'Olası tanılar listesi',
+    promptInstruction: `AYIRICI TANI LİSTESİ HAZIRLA:
+- Bulgulara dayanarak olası tanıları en muhtemelden en az muhtemele sırala
+- Her tanı için: neden düşünüldüğü, destekleyen bulgular, aleyhte bulgular
+- Varsa "red flag" bulgularını vurgula
+- Her tanı için önerilen doğrulama yöntemi belirt`,
+  },
+  {
+    id: 'recommendation',
+    label: 'Öneri',
+    icon: '💡',
+    description: 'Klinik öneriler',
+    promptInstruction: `KLİNİK ÖNERİ VE YÖNETİM PLANI HAZIRLA:
+- Mevcut bulguları kısaca özetle
+- Ek tetkik önerileri (hangi modalite, ne zaman, neden)
+- Takip planı (süre, aralık)
+- Acil müdahale gerektiren durum varsa belirt
+- Klinik korelasyon önerileri
+- Gerekiyorsa konsültasyon önerisi`,
+  },
+  {
+    id: 'scoring',
+    label: 'Skorlama',
+    icon: '📊',
+    description: 'İlgili skorlama sistemi',
+    promptInstruction: `İLGİLİ SKORLAMA SİSTEMİNİ UYGULA:
+- Görüntüdeki bulgulara uygun skorlama sistemini belirle ve uygula
+  (BI-RADS, LI-RADS, Lung-RADS, PI-RADS, TI-RADS, Bosniak, O-RADS, AO vb.)
+- Skorlama kriterlerini madde madde değerlendir
+- Final skoru/kategoriyi ver ve anlamını açıkla
+- Skora göre önerilen yönetim planını belirt
+- Uygun skorlama sistemi yoksa bunu belirt`,
+  },
+  {
+    id: 'comparison',
+    label: 'Karşılaştırma',
+    icon: '🔄',
+    description: 'Önceki ile karşılaştır',
+    promptInstruction: `KARŞILAŞTIRMALI ANALİZ YAP:
+- Mevcut görüntüdeki bulguları tanımla
+- Eğer önceki görüntü veya bilgi varsa karşılaştır
+- Değişen, yeni ortaya çıkan veya kaybolan bulgular
+- Boyut değişimi (varsa yüzde olarak)
+- Progresyon / regresyon / stabil değerlendirmesi
+- RECIST veya uygun yanıt kriterlerini kullan`,
+  },
+];
+
+// Get response type prompt modifier
+export function getResponseTypeInstruction(responseTypeId: string): string {
+  const rt = RESPONSE_TYPES.find((r) => r.id === responseTypeId);
+  return rt ? `\n\nYANIT FORMATI TALİMATI:\n${rt.promptInstruction}` : '';
+}
+
 // Medical disclaimer text
 export const MEDICAL_DISCLAIMER = 'Bu analiz yapay zeka destekli bir karar destek aracıdır. Kesin tanı koymaz, klinik kararın yerini almaz. Tüm bulgular uzman hekim tarafından değerlendirilmelidir.';
