@@ -1,15 +1,22 @@
 // Vercel Serverless Function — proxies requests to Gemini API
 // API key is stored as GEMINI_API_KEY environment variable in Vercel
 
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
 export const config = {
   maxDuration: 60,
 };
 
-export default async function handler(req: any, res: any) {
+// Input limits
+const MAX_PROMPT_LENGTH = 10_000;
+const MAX_HISTORY_TURNS = 10;
+const MAX_IMAGE_SIZE_BYTES = 20_000_000; // ~20MB base64
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-RA-Auth');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -17,6 +24,12 @@ export default async function handler(req: any, res: any) {
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Auth check — require session token
+  const authToken = req.headers['x-ra-auth'];
+  if (!authToken || authToken !== '1') {
+    return res.status(401).json({ error: 'Unauthorized — oturum acin' });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -27,13 +40,22 @@ export default async function handler(req: any, res: any) {
   try {
     const { prompt, imageBase64, systemPrompt, history } = req.body;
 
-    if (!prompt) {
-      return res.status(400).json({ error: 'prompt is required' });
+    // Input validation
+    if (!prompt || typeof prompt !== 'string') {
+      return res.status(400).json({ error: 'prompt is required and must be a string' });
+    }
+
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: `prompt too long (max ${MAX_PROMPT_LENGTH} chars)` });
+    }
+
+    if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.length > MAX_IMAGE_SIZE_BYTES) {
+      return res.status(400).json({ error: 'Image too large (max ~15MB)' });
     }
 
     // Build current message parts
-    const currentParts: any[] = [];
-    if (imageBase64) {
+    const currentParts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [];
+    if (imageBase64 && typeof imageBase64 === 'string') {
       currentParts.push({
         inlineData: {
           mimeType: 'image/png',
@@ -44,17 +66,18 @@ export default async function handler(req: any, res: any) {
     currentParts.push({ text: prompt });
 
     // Build contents array with conversation history
-    const contents: any[] = [];
+    const contents: Array<{ role: string; parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> }> = [];
 
     // Add previous conversation turns (if any)
     if (Array.isArray(history) && history.length > 0) {
-      // Keep last 10 turns to stay within token limits
-      const recentHistory = history.slice(-10);
+      const recentHistory = history.slice(-MAX_HISTORY_TURNS);
       for (const turn of recentHistory) {
-        contents.push({
-          role: turn.role,
-          parts: turn.parts,
-        });
+        if (turn.role && Array.isArray(turn.parts)) {
+          contents.push({
+            role: String(turn.role),
+            parts: turn.parts,
+          });
+        }
       }
     }
 
@@ -64,7 +87,11 @@ export default async function handler(req: any, res: any) {
       parts: currentParts,
     });
 
-    const body: any = {
+    const body: {
+      contents: typeof contents;
+      generationConfig: { temperature: number; maxOutputTokens: number };
+      systemInstruction?: { parts: Array<{ text: string }> };
+    } = {
       contents,
       generationConfig: {
         temperature: 0.3,
@@ -72,7 +99,7 @@ export default async function handler(req: any, res: any) {
       },
     };
 
-    if (systemPrompt) {
+    if (systemPrompt && typeof systemPrompt === 'string') {
       body.systemInstruction = {
         parts: [{ text: systemPrompt }],
       };
@@ -96,11 +123,11 @@ export default async function handler(req: any, res: any) {
     }
 
     if (data.error) {
-      return res.status(500).json({ error: data.error.message });
+      return res.status(500).json({ error: 'AI servisi gecici olarak kullanilamiyor' });
     }
 
     return res.status(500).json({ error: 'No response from Gemini' });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+  } catch {
+    return res.status(500).json({ error: 'Sunucu hatasi — tekrar deneyin' });
   }
 }

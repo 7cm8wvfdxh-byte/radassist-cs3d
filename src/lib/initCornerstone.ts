@@ -141,7 +141,25 @@ export async function loadDicomFiles(
   return imageIds;
 }
 
-export function parseDicomMetadata(imageId: string): Record<string, any> {
+export interface DicomMetadata {
+  patientName: string;
+  patientId: string;
+  studyDate: string;
+  studyDescription: string;
+  seriesDescription: string;
+  seriesNumber: string;
+  modality: string;
+  sliceThickness: string;
+  sliceLocation: string;
+}
+
+const EMPTY_METADATA: DicomMetadata = {
+  patientName: '', patientId: '', studyDate: '', studyDescription: '',
+  seriesDescription: '', seriesNumber: '', modality: '',
+  sliceThickness: '', sliceLocation: '',
+};
+
+export function parseDicomMetadata(imageId: string): DicomMetadata {
   try {
     const generalSeriesModule = cornerstone.metaData.get(
       'generalSeriesModule',
@@ -169,7 +187,7 @@ export function parseDicomMetadata(imageId: string): Record<string, any> {
       sliceLocation: imagePlaneModule?.sliceLocation || '',
     };
   } catch {
-    return {};
+    return EMPTY_METADATA;
   }
 }
 

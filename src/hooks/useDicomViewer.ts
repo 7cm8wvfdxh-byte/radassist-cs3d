@@ -13,6 +13,22 @@ import {
 import { logToolUse } from '../lib/logger';
 import type { SeriesInfo } from '../types';
 
+// Cornerstone3D viewport type — avoids `any` for the viewport reference
+interface CornerstoneViewport {
+  setStack: (imageIds: string[], index: number) => Promise<void>;
+  render: () => void;
+  resetCamera: () => void;
+  resetProperties: () => void;
+  getCamera: () => { parallelScale?: number } | null;
+}
+
+// Cornerstone3D rendering engine type
+interface CornerstoneRenderingEngine {
+  destroy: () => void;
+  enableElement: (config: { viewportId: string; type: unknown; element: HTMLDivElement }) => void;
+  getViewport: (id: string) => CornerstoneViewport | null;
+}
+
 export function useDicomViewer() {
   const [csReady, setCsReady] = useState(false);
   const [activeTool, setActiveToolState] = useState('WindowLevel');
@@ -22,19 +38,23 @@ export function useDicomViewer() {
   const [zoom, setZoom] = useState(1);
 
   const viewportRef = useRef<HTMLDivElement>(null);
-  const renderingEngineRef = useRef<any>(null);
+  const renderingEngineRef = useRef<CornerstoneRenderingEngine | null>(null);
   const cleanupListenersRef = useRef<(() => void) | null>(null);
+  // Race condition guard — tracks the current display operation
+  const displayIdRef = useRef(0);
 
   // Initialize Cornerstone3D on mount
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         await initCornerstone();
-        setCsReady(true);
+        if (!cancelled) setCsReady(true);
       } catch (err) {
         console.error('Cornerstone init failed:', err);
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   // Group DICOM imageIds by series UID
@@ -71,9 +91,12 @@ export function useDicomViewer() {
     []
   );
 
-  // Display a series in the viewport
+  // Display a series in the viewport — with race condition protection
   const displaySeries = async (imageIds: string[]) => {
     if (!viewportRef.current) return;
+
+    // Increment display ID — if another call comes in, this one will be stale
+    const thisDisplayId = ++displayIdRef.current;
 
     // Clean up previous event listeners
     if (cleanupListenersRef.current) {
@@ -84,9 +107,10 @@ export function useDicomViewer() {
     // Destroy existing rendering engine
     if (renderingEngineRef.current) {
       renderingEngineRef.current.destroy();
+      renderingEngineRef.current = null;
     }
 
-    const renderingEngine = new cornerstone.RenderingEngine(RENDERING_ENGINE_ID);
+    const renderingEngine = new cornerstone.RenderingEngine(RENDERING_ENGINE_ID) as CornerstoneRenderingEngine;
     renderingEngineRef.current = renderingEngine;
 
     const viewportId = 'STACK_VIEWPORT';
@@ -102,19 +126,30 @@ export function useDicomViewer() {
       toolGroup.addViewport(viewportId, RENDERING_ENGINE_ID);
     }
 
-    const viewport = renderingEngine.getViewport(viewportId) as any;
+    const viewport = renderingEngine.getViewport(viewportId);
+    if (!viewport) return;
+
     await viewport.setStack(imageIds, 0);
+
+    // Race condition check — if a newer display was triggered, abandon this one
+    if (displayIdRef.current !== thisDisplayId) return;
+
     viewport.render();
 
     // Event listeners with cleanup
     const element = viewportRef.current;
+    if (!element) return;
 
-    const onStackNewImage = ((evt: any) => {
-      setImageIndex(evt.detail.imageIdIndex);
+    const onStackNewImage = ((evt: Event) => {
+      const detail = (evt as CustomEvent).detail;
+      if (detail?.imageIdIndex !== undefined) {
+        setImageIndex(detail.imageIdIndex);
+      }
     }) as EventListener;
 
-    const onVoiModified = ((evt: any) => {
-      const { range } = evt.detail;
+    const onVoiModified = ((evt: Event) => {
+      const detail = (evt as CustomEvent).detail;
+      const range = detail?.range;
       if (range) {
         setWwwl({
           ww: Math.round(range.upper - range.lower),
@@ -127,7 +162,7 @@ export function useDicomViewer() {
       try {
         const cam = viewport.getCamera();
         if (cam?.parallelScale) setZoom(1);
-      } catch {}
+      } catch { /* viewport may be destroyed */ }
     }) as EventListener;
 
     element.addEventListener(cornerstone.Enums.Events.STACK_NEW_IMAGE, onStackNewImage);

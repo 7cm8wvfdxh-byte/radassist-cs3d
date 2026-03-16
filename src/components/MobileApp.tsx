@@ -18,6 +18,8 @@ import {
 } from '../lib/mediaCapture';
 import { analyzeWithGemini, buildConversationHistorySimple } from '../lib/geminiClient';
 import { useClinicalContext } from '../hooks/useClinicalContext';
+import { drawCanvasWithPaths, getCanvasPosition, initCanvasFromBase64 } from '../lib/canvasUtils';
+import type { CanvasPath } from '../lib/canvasUtils';
 
 interface MobileAppProps { onSwitchToDesktop: () => void; }
 
@@ -35,8 +37,8 @@ export default function MobileApp(_props: MobileAppProps) {
 
   // Annotation
   const [annotating, setAnnotating] = useState(false);
-  const [paths, setPaths] = useState<{ x: number; y: number }[][]>([]);
-  const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
+  const [paths, setPaths] = useState<CanvasPath[][]>([]);
+  const [currentPath, setCurrentPath] = useState<CanvasPath[]>([]);
   const [annotationLabel, setAnnotationLabel] = useState('');
   const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null);
 
@@ -130,72 +132,36 @@ export default function MobileApp(_props: MobileAppProps) {
     e.target.value = '';
   };
 
-  // ANNOTATION CANVAS
+  // ANNOTATION CANVAS — using shared canvas utils
   const initAnnotationCanvas = useCallback(async () => {
     const base64 = await getBase64();
     if (!base64 || !canvasRef.current) return;
-    const img = new Image();
-    img.onload = () => {
-      const canvas = canvasRef.current!;
-      const parent = canvas.parentElement!;
-      canvas.width = parent.clientWidth;
-      canvas.height = parent.clientHeight;
+    initCanvasFromBase64(canvasRef.current, base64, (img) => {
       setBaseImage(img);
-    };
-    img.src = `data:image/png;base64,${base64}`;
+    });
   }, [mediaFile, mediaType]);
 
-  // Redraw annotation canvas
+  // Redraw annotation canvas — using shared drawCanvasWithPaths
   useEffect(() => {
     if (step !== 'annotate' || !baseImage || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d')!;
-    const w = canvas.width, h = canvas.height;
-    const scale = Math.min(w / baseImage.width, h / baseImage.height);
-    const dw = baseImage.width * scale, dh = baseImage.height * scale;
-    const ox = (w - dw) / 2, oy = (h - dh) / 2;
-
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(baseImage, ox, oy, dw, dh);
-
-    const allPaths = [...paths, ...(currentPath.length > 1 ? [currentPath] : [])];
-    for (const path of allPaths) {
-      if (path.length < 2) continue;
-      ctx.beginPath();
-      ctx.moveTo(path[0].x, path[0].y);
-      for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y);
-      ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 3;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-    }
-    if (paths.length > 0) {
-      const last = paths[paths.length - 1];
-      if (last.length > 5) {
-        ctx.beginPath();
-        ctx.moveTo(last[0].x, last[0].y);
-        for (let i = 1; i < last.length; i++) ctx.lineTo(last[i].x, last[i].y);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(239,68,68,0.15)';
-        ctx.fill();
-      }
-    }
+    drawCanvasWithPaths({
+      canvas: canvasRef.current,
+      baseImage,
+      paths,
+      currentPath,
+      strokeColor: '#ef4444',
+      lineWidth: 3,
+    });
   }, [baseImage, paths, currentPath, step]);
 
-  const getCanvasPos = (e: React.TouchEvent | React.MouseEvent) => {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    const cx = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const cy = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    return { x: cx - rect.left, y: cy - rect.top };
-  };
   const onDown = (e: React.TouchEvent | React.MouseEvent) => {
-    e.preventDefault(); setAnnotating(true); setCurrentPath([getCanvasPos(e)]);
+    if (!canvasRef.current) return;
+    e.preventDefault(); setAnnotating(true);
+    setCurrentPath([getCanvasPosition(e, canvasRef.current)]);
   };
   const onMove = (e: React.TouchEvent | React.MouseEvent) => {
-    if (!annotating) return; e.preventDefault();
-    setCurrentPath((p) => [...p, getCanvasPos(e)]);
+    if (!annotating || !canvasRef.current) return; e.preventDefault();
+    setCurrentPath((p) => [...p, getCanvasPosition(e, canvasRef.current!)]);
   };
   const onUp = () => {
     if (!annotating) return; setAnnotating(false);

@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { ORGAN_PRESETS } from '../lib/organTree';
-import type { AnnotationData, AnnotationOverlayProps } from '../types';
+import { drawCanvasWithPaths, getCanvasPosition, initCanvasFromBase64 } from '../lib/canvasUtils';
+import type { CanvasPath } from '../lib/canvasUtils';
+import type { AnnotationOverlayProps } from '../types';
 
 export default function AnnotationOverlay({
   visible,
@@ -12,12 +14,16 @@ export default function AnnotationOverlay({
   const [isDrawing, setIsDrawing] = useState(false);
   const [selectedOrgan, setSelectedOrgan] = useState('general');
   const [drawMode, setDrawMode] = useState<'organ' | 'draw'>('organ');
-  const [paths, setPaths] = useState<{ x: number; y: number }[][]>([]);
-  const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[]>([]);
+  const [paths, setPaths] = useState<CanvasPath[][]>([]);
+  const [currentPath, setCurrentPath] = useState<CanvasPath[]>([]);
   const [brushSize, setBrushSize] = useState(3);
   const [canvasReady, setCanvasReady] = useState(false);
   const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null);
   const [isMobile] = useState(() => window.innerWidth <= 768);
+
+  // Cached organ lookup — avoid repeated .find() calls per render
+  const selectedOrganPreset = ORGAN_PRESETS.find((o) => o.id === selectedOrgan);
+  const organColor = selectedOrganPreset?.color || '#ef4444';
 
   // Initialize canvas with base image
   useEffect(() => {
@@ -27,19 +33,16 @@ export default function AnnotationOverlay({
       const base64 = await captureBase();
       if (!base64 || !canvasRef.current) return;
 
-      const img = new Image();
-      img.onload = () => {
-        const canvas = canvasRef.current!;
-        const container = canvas.parentElement!;
+      initCanvasFromBase64(canvasRef.current, base64, (img) => {
+        // After initCanvasFromBase64 sets canvas dimensions, draw the initial image
+        if (!canvasRef.current) return;
+        const ctx = canvasRef.current.getContext('2d');
+        if (!ctx) return;
+        const container = canvasRef.current.parentElement;
+        if (!container) return;
         const containerW = container.clientWidth;
         const containerH = container.clientHeight;
-
-        // Fit image to container
         const scale = Math.min(containerW / img.width, containerH / img.height);
-        canvas.width = containerW;
-        canvas.height = containerH;
-
-        const ctx = canvas.getContext('2d')!;
         const drawW = img.width * scale;
         const drawH = img.height * scale;
         const offsetX = (containerW - drawW) / 2;
@@ -51,8 +54,7 @@ export default function AnnotationOverlay({
 
         setBaseImage(img);
         setCanvasReady(true);
-      };
-      img.src = `data:image/png;base64,${base64}`;
+      });
     };
 
     initCanvas();
@@ -60,87 +62,33 @@ export default function AnnotationOverlay({
     setCurrentPath([]);
   }, [visible, captureBase]);
 
-  // Redraw canvas with all paths
+  // Redraw canvas with all paths — uses shared utility
   const redraw = useCallback(() => {
     if (!canvasRef.current || !baseImage) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d')!;
-    const containerW = canvas.width;
-    const containerH = canvas.height;
-
-    const scale = Math.min(containerW / baseImage.width, containerH / baseImage.height);
-    const drawW = baseImage.width * scale;
-    const drawH = baseImage.height * scale;
-    const offsetX = (containerW - drawW) / 2;
-    const offsetY = (containerH - drawH) / 2;
-
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, containerW, containerH);
-    ctx.drawImage(baseImage, offsetX, offsetY, drawW, drawH);
-
-    // Draw all saved paths
-    const organColor = ORGAN_PRESETS.find((o) => o.id === selectedOrgan)?.color || '#ef4444';
-    const allPaths = [...paths, ...(currentPath.length > 0 ? [currentPath] : [])];
-
-    for (const path of allPaths) {
-      if (path.length < 2) continue;
-      ctx.beginPath();
-      ctx.moveTo(path[0].x, path[0].y);
-      for (let i = 1; i < path.length; i++) {
-        ctx.lineTo(path[i].x, path[i].y);
-      }
-      ctx.strokeStyle = organColor;
-      ctx.lineWidth = brushSize;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.globalAlpha = 0.85;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-
-    // If paths form a closed region, fill with transparent overlay
-    if (paths.length > 0) {
-      const lastPath = paths[paths.length - 1];
-      if (lastPath.length > 10) {
-        ctx.beginPath();
-        ctx.moveTo(lastPath[0].x, lastPath[0].y);
-        for (let i = 1; i < lastPath.length; i++) {
-          ctx.lineTo(lastPath[i].x, lastPath[i].y);
-        }
-        ctx.closePath();
-        ctx.fillStyle = organColor + '20';
-        ctx.fill();
-      }
-    }
-  }, [baseImage, paths, currentPath, selectedOrgan, brushSize]);
+    drawCanvasWithPaths({
+      canvas: canvasRef.current,
+      baseImage,
+      paths,
+      currentPath,
+      strokeColor: organColor,
+      lineWidth: brushSize,
+    });
+  }, [baseImage, paths, currentPath, organColor, brushSize]);
 
   useEffect(() => {
     redraw();
   }, [redraw]);
 
-  // Mouse/touch handlers
-  const getPos = (e: React.MouseEvent | React.TouchEvent) => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    return {
-      x: clientX - rect.left,
-      y: clientY - rect.top,
-    };
-  };
-
+  // Mouse/touch handlers — using shared getCanvasPosition
   const handlePointerDown = (e: React.MouseEvent | React.TouchEvent) => {
-    if (drawMode !== 'draw') return;
+    if (drawMode !== 'draw' || !canvasRef.current) return;
     setIsDrawing(true);
-    const pos = getPos(e);
-    setCurrentPath([pos]);
+    setCurrentPath([getCanvasPosition(e, canvasRef.current)]);
   };
 
   const handlePointerMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDrawing || drawMode !== 'draw') return;
-    const pos = getPos(e);
-    setCurrentPath((prev) => [...prev, pos]);
+    if (!isDrawing || drawMode !== 'draw' || !canvasRef.current) return;
+    setCurrentPath((prev) => [...prev, getCanvasPosition(e, canvasRef.current!)]);
   };
 
   const handlePointerUp = () => {
@@ -166,17 +114,16 @@ export default function AnnotationOverlay({
 
   // Analyze
   const handleAnalyze = () => {
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || !selectedOrganPreset) return;
 
     const hasDrawing = paths.length > 0;
     let fullImageWithAnnotation: string | null = null;
     let drawingDataUrl: string | null = null;
 
     if (hasDrawing) {
-      // Full image with annotation overlay
       fullImageWithAnnotation = canvasRef.current.toDataURL('image/png').split(',')[1];
 
-      // Try to crop to drawn region
+      // Crop to drawn region
       const allPoints = paths.flat();
       if (allPoints.length > 0) {
         const minX = Math.max(0, Math.min(...allPoints.map((p) => p.x)) - 20);
@@ -187,23 +134,23 @@ export default function AnnotationOverlay({
         const cropCanvas = document.createElement('canvas');
         cropCanvas.width = maxX - minX;
         cropCanvas.height = maxY - minY;
-        const cropCtx = cropCanvas.getContext('2d')!;
-        cropCtx.drawImage(
-          canvasRef.current,
-          minX, minY, maxX - minX, maxY - minY,
-          0, 0, maxX - minX, maxY - minY
-        );
-        drawingDataUrl = cropCanvas.toDataURL('image/png').split(',')[1];
+        const cropCtx = cropCanvas.getContext('2d');
+        if (cropCtx) {
+          cropCtx.drawImage(
+            canvasRef.current,
+            minX, minY, maxX - minX, maxY - minY,
+            0, 0, maxX - minX, maxY - minY
+          );
+          drawingDataUrl = cropCanvas.toDataURL('image/png').split(',')[1];
+        }
       }
     } else {
-      // No drawing — send full image
       fullImageWithAnnotation = canvasRef.current.toDataURL('image/png').split(',')[1];
     }
 
-    const organ = ORGAN_PRESETS.find((o) => o.id === selectedOrgan)!;
     onAnalyze({
       organ: selectedOrgan,
-      organLabel: organ.label,
+      organLabel: selectedOrganPreset.label,
       drawingDataUrl,
       fullImageWithAnnotation,
       hasDrawing,
@@ -229,7 +176,7 @@ export default function AnnotationOverlay({
             fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
             fontFamily: "'Plus Jakarta Sans', sans-serif",
           }}>
-            Bölge Seç & İşaretle
+            Bolge Sec & Isaretle
           </span>
 
           {/* Mode toggle */}
@@ -259,7 +206,7 @@ export default function AnnotationOverlay({
                 fontFamily: "'JetBrains Mono', monospace",
               }}
             >
-              Çizim
+              Cizim
             </button>
           </div>
         </div>
@@ -267,9 +214,8 @@ export default function AnnotationOverlay({
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {drawMode === 'draw' && (
             <>
-              {/* Brush size */}
               <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-muted)' }}>
-                Kalınlık
+                Kalinlik
                 <input
                   type="range"
                   min="1"
@@ -280,15 +226,15 @@ export default function AnnotationOverlay({
                 />
               </label>
               <button onClick={handleUndo} style={toolBtnStyle} title="Geri Al">
-                ↩
+                {'<-'}
               </button>
               <button onClick={handleClear} style={toolBtnStyle} title="Temizle">
-                🗑
+                X
               </button>
             </>
           )}
           <button onClick={onClose} style={{ ...toolBtnStyle, background: 'rgba(239,68,68,0.3)' }}>
-            ✕
+            &times;
           </button>
         </div>
       </div>
@@ -298,8 +244,8 @@ export default function AnnotationOverlay({
         {/* Organ sidebar / mobile horizontal strip */}
         <div style={{
           ...(isMobile
-            ? { height: 'auto', display: 'flex', flexDirection: 'row', overflowX: 'auto', padding: '4px 6px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', gap: 4, alignItems: 'center', flexShrink: 0 }
-            : { width: 140, background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', overflowY: 'auto', padding: 6 }
+            ? { height: 'auto', display: 'flex', flexDirection: 'row' as const, overflowX: 'auto', padding: '4px 6px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', gap: 4, alignItems: 'center', flexShrink: 0 }
+            : { width: 140, background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', overflowY: 'auto' as const, padding: 6 }
           ),
         }}>
           {!isMobile && <div style={{
@@ -307,7 +253,7 @@ export default function AnnotationOverlay({
             textTransform: 'uppercase', letterSpacing: '0.05em',
             padding: '6px 8px',
           }}>
-            Bölge / Organ
+            Bolge / Organ
           </div>}
           {ORGAN_PRESETS.map((organ) => (
             <button
@@ -359,7 +305,7 @@ export default function AnnotationOverlay({
               fontSize: 12, color: 'var(--text-secondary)',
               pointerEvents: 'none', whiteSpace: 'nowrap',
             }}>
-              Lezyonu veya ilgilendiğiniz bölgeyi çizin
+              Lezyonu veya ilgilendiginiz bolgeyi cizin
             </div>
           )}
 
@@ -367,13 +313,13 @@ export default function AnnotationOverlay({
           <div style={{
             position: 'absolute', top: 12, left: 12,
             padding: '4px 10px', borderRadius: 6,
-            background: (ORGAN_PRESETS.find((o) => o.id === selectedOrgan)?.color || '#3b82f6') + '30',
-            color: ORGAN_PRESETS.find((o) => o.id === selectedOrgan)?.color || '#3b82f6',
+            background: organColor + '30',
+            color: organColor,
             fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
           }}>
-            {ORGAN_PRESETS.find((o) => o.id === selectedOrgan)?.icon}{' '}
-            {ORGAN_PRESETS.find((o) => o.id === selectedOrgan)?.label}
-            {paths.length > 0 && ` + ${paths.length} çizim`}
+            {selectedOrganPreset?.icon}{' '}
+            {selectedOrganPreset?.label}
+            {paths.length > 0 && ` + ${paths.length} cizim`}
           </div>
         </div>
       </div>
@@ -386,10 +332,10 @@ export default function AnnotationOverlay({
       }}>
         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
           {selectedOrgan === 'general'
-            ? 'Tüm görüntü analiz edilecek'
+            ? 'Tum goruntu analiz edilecek'
             : paths.length > 0
-              ? 'İşaretli bölge + organ bilgisi ile analiz'
-              : 'Seçili organ odaklı analiz (çizim opsiyonel)'}
+              ? 'Isaretli bolge + organ bilgisi ile analiz'
+              : 'Secili organ odakli analiz (cizim opsiyonel)'}
         </div>
         <button
           onClick={handleAnalyze}
@@ -402,7 +348,7 @@ export default function AnnotationOverlay({
             opacity: canvasReady ? 1 : 0.5,
           }}
         >
-          🔬 Analiz Et
+          Analiz Et
         </button>
       </div>
     </div>

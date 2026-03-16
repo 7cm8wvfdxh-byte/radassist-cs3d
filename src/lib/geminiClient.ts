@@ -3,6 +3,7 @@
 
 import type { ChatMessage, GeminiTurn } from '../types';
 import { getSystemPrompt } from './promptTemplates';
+import { apiFetch } from './httpClient';
 
 /** Build Gemini-compatible conversation history from ChatMessage[] */
 export function buildConversationHistory(messages: ChatMessage[]): GeminiTurn[] {
@@ -40,21 +41,17 @@ export async function analyzeWithGemini(opts: {
   history?: GeminiTurn[];
 }): Promise<string> {
   try {
-    const res = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const result = await apiFetch<{ text?: string; error?: string }>('/api/analyze', {
+      body: {
         prompt: opts.prompt,
         imageBase64: opts.imageBase64,
         systemPrompt: opts.systemPrompt || getSystemPrompt(opts.modality),
         history: opts.history || [],
-      }),
+      },
     });
 
-    const data = await res.json();
-
-    if (data.text) return data.text;
-    if (data.error) return `Hata: ${data.error}`;
+    if (result.data.text) return result.data.text;
+    if (result.data.error) return `Hata: ${result.data.error}`;
     return 'Yanit alinamadi.';
   } catch (err) {
     return `Baglanti hatasi: ${(err as Error).message}`;
