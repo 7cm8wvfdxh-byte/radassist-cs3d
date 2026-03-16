@@ -20,7 +20,15 @@ interface MobileAppProps {
   onSwitchToDesktop: () => void;
 }
 
-type Step = 'capture' | 'review' | 'result';
+interface CapturedFrame {
+  id: string;
+  thumbnailUrl: string;
+  base64: string;
+  timestamp: number; // video seconds
+  selected: boolean;
+}
+
+type Step = 'capture' | 'review' | 'frames' | 'result';
 type MediaType = 'image' | 'video';
 
 export default function MobileApp(_props: MobileAppProps) {
@@ -32,11 +40,14 @@ export default function MobileApp(_props: MobileAppProps) {
   const [analyzing, setAnalyzing] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+  const [frames, setFrames] = useState<CapturedFrame[]>([]);
+  const [analyzeMode, setAnalyzeMode] = useState<'single' | 'multi'>('single');
 
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const resultEndRef = useRef<HTMLDivElement>(null);
+  const framesStripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     resultEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -46,18 +57,62 @@ export default function MobileApp(_props: MobileAppProps) {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const isVideo = file.type.startsWith('video/');
     setMediaType(isVideo ? 'video' : 'image');
     setMediaUrl(URL.createObjectURL(file));
     setMediaFile(file);
     setStep('review');
     setMessages([]);
-    // Reset input so same file can be re-selected
+    setFrames([]);
     e.target.value = '';
   };
 
-  // --- Image/frame to base64 ---
+  // --- Capture a frame from video ---
+  const captureFrame = () => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth || 640;
+    c.height = v.videoHeight || 480;
+    c.getContext('2d')!.drawImage(v, 0, 0);
+
+    const base64 = c.toDataURL('image/png').split(',')[1];
+    const thumbnailUrl = c.toDataURL('image/jpeg', 0.6);
+    const timestamp = v.currentTime;
+
+    const newFrame: CapturedFrame = {
+      id: `f_${Date.now()}`,
+      thumbnailUrl,
+      base64,
+      timestamp,
+      selected: true,
+    };
+
+    setFrames((prev) => [...prev, newFrame]);
+
+    // Scroll strip to end
+    setTimeout(() => {
+      framesStripRef.current?.scrollTo({
+        left: framesStripRef.current.scrollWidth,
+        behavior: 'smooth',
+      });
+    }, 100);
+  };
+
+  // --- Toggle frame selection ---
+  const toggleFrame = (id: string) => {
+    setFrames((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, selected: !f.selected } : f))
+    );
+  };
+
+  // --- Remove a frame ---
+  const removeFrame = (id: string) => {
+    setFrames((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  // --- Get base64 for current view ---
   const getBase64 = async (): Promise<string | null> => {
     try {
       if (mediaType === 'video' && videoRef.current) {
@@ -103,9 +158,11 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
     }
   };
 
-  const handleAnalyze = async () => {
+  // --- Analyze single image or current video frame ---
+  const handleAnalyzeSingle = async () => {
     if (!mediaFile) return;
     setAnalyzing(true);
+    setAnalyzeMode('single');
     setStep('result');
 
     const base64 = await getBase64();
@@ -121,14 +178,78 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
     setAnalyzing(false);
   };
 
+  // --- Analyze multiple captured frames ---
+  const handleAnalyzeMulti = async () => {
+    const selected = frames.filter((f) => f.selected);
+    if (selected.length === 0) return;
+
+    setAnalyzing(true);
+    setAnalyzeMode('multi');
+    setStep('result');
+
+    const organLabel = ORGANS.find((o) => o.id === organ)?.label || 'Genel';
+    const newMessages: { role: string; text: string }[] = [];
+
+    // Analyze each frame
+    for (let i = 0; i < selected.length; i++) {
+      const frame = selected[i];
+      const frameNum = i + 1;
+      const totalFrames = selected.length;
+      const timeStr = formatTime(frame.timestamp);
+
+      newMessages.push({
+        role: 'user',
+        text: `📸 Kare ${frameNum}/${totalFrames} (${timeStr})`,
+      });
+      setMessages([...newMessages]);
+
+      const prompt = selected.length === 1
+        ? (organ === 'general'
+            ? 'Bu video karesini analiz et. Sistematik rapor hazırla.'
+            : `Bu video karesinde ${organLabel} bölgesine odaklanarak analiz et.`)
+        : (organ === 'general'
+            ? `Bu videodan seçilen ${totalFrames} kareden ${frameNum}. kareyi analiz et (zaman: ${timeStr}). Bulguları raporla.`
+            : `Bu videodan seçilen ${totalFrames} kareden ${frameNum}. karede ${organLabel} bölgesini analiz et (zaman: ${timeStr}).`);
+
+      const text = await callAI(prompt, frame.base64);
+      newMessages.push({ role: 'ai', text });
+      setMessages([...newMessages]);
+    }
+
+    // If multiple frames, add comparison summary
+    if (selected.length > 1) {
+      newMessages.push({
+        role: 'user',
+        text: `📊 ${selected.length} kare karşılaştırması`,
+      });
+      setMessages([...newMessages]);
+
+      const summaryPrompt = `${selected.length} farklı video karesini analiz ettim. Yukarıdaki tüm bulgularımı karşılaştırarak kısa bir özet ve genel değerlendirme yap. Kareler arası farklılıklar veya tutarlı bulgular varsa belirt.`;
+      const summary = await callAI(summaryPrompt, selected[0].base64);
+      newMessages.push({ role: 'ai', text: summary });
+      setMessages([...newMessages]);
+    }
+
+    setAnalyzing(false);
+  };
+
+  // --- Chat follow-up ---
   const handleChat = async () => {
-    if (!chatInput.trim() || !mediaFile) return;
+    if (!chatInput.trim()) return;
     const msg = chatInput.trim();
     setChatInput('');
     setMessages((p) => [...p, { role: 'user', text: msg }]);
     setAnalyzing(true);
 
-    const base64 = await getBase64();
+    // Use first selected frame or current image
+    let base64: string | null = null;
+    const selectedFrames = frames.filter((f) => f.selected);
+    if (selectedFrames.length > 0) {
+      base64 = selectedFrames[0].base64;
+    } else {
+      base64 = await getBase64();
+    }
+
     const text = await callAI(msg, base64);
     setMessages((p) => [...p, { role: 'ai', text }]);
     setAnalyzing(false);
@@ -136,12 +257,25 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
 
   const handleReset = () => {
     if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+    frames.forEach((f) => {
+      if (f.thumbnailUrl.startsWith('data:')) return;
+      URL.revokeObjectURL(f.thumbnailUrl);
+    });
     setMediaUrl('');
     setMediaFile(null);
     setStep('capture');
     setMessages([]);
+    setFrames([]);
     setOrgan('general');
   };
+
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const selectedCount = frames.filter((f) => f.selected).length;
 
   // ============ RENDER ============
   return (
@@ -174,9 +308,7 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
             border: '1px solid #2a2a35', background: 'transparent',
             color: '#9898a8', fontSize: 12, fontWeight: 600,
             fontFamily: 'inherit', cursor: 'pointer',
-          }}>
-            ← Yeni
-          </button>
+          }}>← Yeni</button>
         )}
         <span style={{ fontSize: 10, color: '#606070', fontFamily: "'JetBrains Mono',monospace" }}>
           {getUser()}
@@ -190,7 +322,6 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
           alignItems: 'center', justifyContent: 'center',
           padding: 24, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
         }}>
-          {/* Hidden inputs */}
           <input ref={cameraRef} type="file" accept="image/*" capture="environment"
             style={{ display: 'none' }} onChange={handleFileSelect} />
           <input ref={galleryRef} type="file" accept="image/*,video/*,.dcm"
@@ -204,21 +335,10 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
             Fotoğraf çekin, galeriden seçin veya video yükleyin
           </p>
 
-          <button onClick={() => cameraRef.current?.click()} style={{
-            width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12,
-            border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)',
-            color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer',
-            fontFamily: 'inherit', marginBottom: 12,
-          }}>
+          <button onClick={() => cameraRef.current?.click()} style={btnPrimary}>
             📸 Fotoğraf Çek
           </button>
-
-          <button onClick={() => galleryRef.current?.click()} style={{
-            width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12,
-            border: '1px solid #2a2a35', background: '#19191e',
-            color: '#e8e8ec', fontSize: 16, fontWeight: 600, cursor: 'pointer',
-            fontFamily: 'inherit',
-          }}>
+          <button onClick={() => galleryRef.current?.click()} style={btnSecondary}>
             🖼️ Galeri / Video Seç
           </button>
         </div>
@@ -232,7 +352,7 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
         }}>
           {/* Media preview */}
           <div style={{
-            width: '100%', aspectRatio: '4/3', maxHeight: '50vh',
+            width: '100%', aspectRatio: '4/3', maxHeight: '45vh',
             background: '#000', flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             position: 'relative',
@@ -244,19 +364,92 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
               <video ref={videoRef} src={mediaUrl} controls playsInline
                 style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             )}
-
-            {/* Video frame capture hint */}
-            {mediaType === 'video' && (
-              <div style={{
-                position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)',
-                padding: '4px 12px', borderRadius: 8,
-                background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
-                fontSize: 11, color: '#06b6d4', whiteSpace: 'nowrap',
-              }}>
-                İstediğin kareye gel → Analiz Et
-              </div>
-            )}
           </div>
+
+          {/* Video: frame capture bar */}
+          {mediaType === 'video' && (
+            <div style={{
+              padding: '10px 16px',
+              borderBottom: '1px solid #1e1e24',
+              background: '#111114', flexShrink: 0,
+            }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                marginBottom: frames.length > 0 ? 10 : 0,
+              }}>
+                <button onClick={captureFrame} style={{
+                  padding: '10px 20px', borderRadius: 10, border: 'none',
+                  background: '#06b6d4', color: '#fff',
+                  fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  📸 Kare Yakala
+                </button>
+                {frames.length > 0 && (
+                  <span style={{ fontSize: 12, color: '#06b6d4', fontWeight: 600 }}>
+                    {frames.length} kare yakalandı
+                  </span>
+                )}
+              </div>
+
+              {/* Captured frames strip */}
+              {frames.length > 0 && (
+                <div ref={framesStripRef} style={{
+                  display: 'flex', gap: 8, overflowX: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                  paddingBottom: 4,
+                }}>
+                  {frames.map((f, i) => (
+                    <div key={f.id} style={{
+                      position: 'relative', flexShrink: 0,
+                      width: 72, borderRadius: 8, overflow: 'hidden',
+                      border: `2px solid ${f.selected ? '#3b82f6' : '#1e1e24'}`,
+                      opacity: f.selected ? 1 : 0.5,
+                    }}>
+                      <img
+                        src={f.thumbnailUrl} alt={`Kare ${i + 1}`}
+                        style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }}
+                        onClick={() => toggleFrame(f.id)}
+                      />
+                      {/* Time badge */}
+                      <div style={{
+                        position: 'absolute', bottom: 0, left: 0, right: 0,
+                        padding: '2px 0', textAlign: 'center',
+                        background: 'rgba(0,0,0,0.7)',
+                        fontSize: 9, color: '#9898a8',
+                        fontFamily: "'JetBrains Mono',monospace",
+                      }}>
+                        {formatTime(f.timestamp)}
+                      </div>
+                      {/* Selection check */}
+                      {f.selected && (
+                        <div style={{
+                          position: 'absolute', top: 2, right: 2,
+                          width: 18, height: 18, borderRadius: 9,
+                          background: '#3b82f6', color: '#fff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 10, fontWeight: 700,
+                        }}>✓</div>
+                      )}
+                      {/* Remove button */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeFrame(f.id); }}
+                        style={{
+                          position: 'absolute', top: 2, left: 2,
+                          width: 18, height: 18, borderRadius: 9,
+                          background: 'rgba(239,68,68,0.8)', color: '#fff',
+                          border: 'none', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 9,
+                        }}
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Organ selector */}
           <div style={{ padding: '14px 16px' }}>
@@ -264,23 +457,17 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
               fontSize: 11, fontWeight: 600, color: '#9898a8',
               textTransform: 'uppercase', letterSpacing: '0.05em',
               marginBottom: 10,
-            }}>
-              Bölge / Organ Seç
-            </div>
-            <div style={{
-              display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8,
-            }}>
+            }}>Bölge / Organ Seç</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
               {ORGANS.map((o) => (
                 <button key={o.id} onClick={() => setOrgan(o.id)} style={{
-                  display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', gap: 3,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
                   padding: '10px 4px', borderRadius: 12,
                   border: `1.5px solid ${organ === o.id ? '#3b82f6' : '#1e1e24'}`,
                   background: organ === o.id ? 'rgba(59,130,246,0.15)' : '#111114',
                   color: organ === o.id ? '#60a5fa' : '#9898a8',
                   fontSize: 10, fontWeight: organ === o.id ? 700 : 500,
                   cursor: 'pointer', fontFamily: 'inherit',
-                  transition: 'all 0.15s',
                 }}>
                   <span style={{ fontSize: 22 }}>{o.icon}</span>
                   {o.label}
@@ -289,21 +476,39 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
             </div>
           </div>
 
-          {/* Analyze button — sticky bottom */}
+          {/* Action buttons — sticky bottom */}
           <div style={{
-            padding: '12px 16px', marginTop: 'auto',
+            padding: '12px 16px',
             borderTop: '1px solid #1e1e24', background: '#0a0a0c',
             position: 'sticky', bottom: 0, flexShrink: 0,
+            display: 'flex', flexDirection: 'column', gap: 8,
           }}>
-            <button onClick={handleAnalyze} style={{
-              width: '100%', padding: '15px 0', borderRadius: 12,
-              border: 'none',
+            {/* Single frame / image analyze */}
+            <button onClick={handleAnalyzeSingle} style={{
+              width: '100%', padding: '14px 0', borderRadius: 12, border: 'none',
               background: 'linear-gradient(135deg,#3b82f6,#2563eb)',
-              color: '#fff', fontSize: 16, fontWeight: 700,
+              color: '#fff', fontSize: 15, fontWeight: 700,
               cursor: 'pointer', fontFamily: 'inherit',
             }}>
-              🔬 {mediaType === 'video' ? 'Bu Kareyi ' : ''}Analiz Et
+              🔬 {mediaType === 'video' ? 'Mevcut Kareyi ' : ''}Analiz Et
             </button>
+
+            {/* Multi-frame analyze — only if video with captured frames */}
+            {mediaType === 'video' && frames.length > 0 && (
+              <button
+                onClick={handleAnalyzeMulti}
+                disabled={selectedCount === 0}
+                style={{
+                  width: '100%', padding: '14px 0', borderRadius: 12,
+                  border: '1.5px solid #06b6d4', background: 'rgba(6,182,212,0.1)',
+                  color: '#06b6d4', fontSize: 15, fontWeight: 700,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  opacity: selectedCount === 0 ? 0.4 : 1,
+                }}
+              >
+                📊 {selectedCount} Kareyi Toplu Analiz Et
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -311,7 +516,7 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
       {/* ── STEP 3: RESULT ── */}
       {step === 'result' && (
         <>
-          {/* Compact header with thumbnail */}
+          {/* Compact header */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10,
             padding: '8px 16px', background: '#111114',
@@ -327,22 +532,50 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
               }
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#e8e8ec' }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
                 {ORGANS.find((o) => o.id === organ)?.icon}{' '}
                 {ORGANS.find((o) => o.id === organ)?.label} Analizi
               </div>
               <div style={{ fontSize: 11, color: '#606070' }}>
-                {analyzing ? 'Analiz ediliyor...' : `${messages.filter(m => m.role === 'ai').length} yanıt`}
+                {analyzing
+                  ? 'Analiz ediliyor...'
+                  : analyzeMode === 'multi'
+                    ? `${selectedCount} kare analiz edildi`
+                    : 'Tamamlandı'}
               </div>
             </div>
           </div>
 
-          {/* Scrollable messages area */}
+          {/* Multi-frame: thumbnail strip at top of results */}
+          {analyzeMode === 'multi' && frames.filter((f) => f.selected).length > 1 && (
+            <div style={{
+              display: 'flex', gap: 6, padding: '8px 16px',
+              overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+              borderBottom: '1px solid #1e1e24', flexShrink: 0,
+            }}>
+              {frames.filter((f) => f.selected).map((f, i) => (
+                <div key={f.id} style={{
+                  width: 52, flexShrink: 0, borderRadius: 6,
+                  overflow: 'hidden', border: '1px solid #2a2a35',
+                  position: 'relative',
+                }}>
+                  <img src={f.thumbnailUrl} alt=""
+                    style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
+                  <div style={{
+                    position: 'absolute', bottom: 0, left: 0, right: 0,
+                    textAlign: 'center', background: 'rgba(0,0,0,0.7)',
+                    fontSize: 8, color: '#9898a8', padding: '1px 0',
+                  }}>#{i + 1}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Messages */}
           <div style={{
             flex: 1, overflowY: 'auto',
             WebkitOverflowScrolling: 'touch',
-            padding: 16,
-            minHeight: 0, /* critical for flex scroll */
+            padding: 16, minHeight: 0,
           }}>
             {analyzing && messages.length === 0 && (
               <div style={{
@@ -379,9 +612,7 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
                     fontSize: 10, fontWeight: 700, color: '#3b82f6',
                     textTransform: 'uppercase', letterSpacing: '0.05em',
                     marginBottom: 8,
-                  }}>
-                    Gemini 2.5 Flash
-                  </div>
+                  }}>Gemini 2.5 Flash</div>
                 )}
                 {m.text.split('\n').map((line, j) => (
                   <p key={j} style={{ margin: '3px 0' }}>{line}</p>
@@ -401,7 +632,7 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
             <div ref={resultEndRef} />
           </div>
 
-          {/* Chat input — fixed bottom */}
+          {/* Chat input */}
           <div style={{
             display: 'flex', gap: 8, padding: '10px 16px',
             borderTop: '1px solid #1e1e24', background: '#111114',
@@ -416,7 +647,7 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
               style={{
                 flex: 1, padding: '12px 14px', borderRadius: 12,
                 border: '1px solid #1e1e24', background: '#19191e',
-                color: '#e8e8ec', fontSize: 16, /* 16px prevents iOS zoom */
+                color: '#e8e8ec', fontSize: 16,
                 fontFamily: 'inherit', outline: 'none',
               }}
             />
@@ -430,12 +661,24 @@ Tıbbi olmayan görüntüler için: İçeriği açıkla.`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 opacity: analyzing || !chatInput.trim() ? 0.4 : 1,
               }}
-            >
-              ➤
-            </button>
+            >➤</button>
           </div>
         </>
       )}
     </div>
   );
 }
+
+// Shared button styles
+const btnPrimary: React.CSSProperties = {
+  width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12,
+  border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)',
+  color: '#fff', fontSize: 16, fontWeight: 600, cursor: 'pointer',
+  fontFamily: "'Plus Jakarta Sans',sans-serif", marginBottom: 12,
+};
+const btnSecondary: React.CSSProperties = {
+  width: '100%', maxWidth: 320, padding: '15px 0', borderRadius: 12,
+  border: '1px solid #2a2a35', background: '#19191e',
+  color: '#e8e8ec', fontSize: 16, fontWeight: 600, cursor: 'pointer',
+  fontFamily: "'Plus Jakarta Sans',sans-serif",
+};
