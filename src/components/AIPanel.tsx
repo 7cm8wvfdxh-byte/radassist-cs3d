@@ -1,5 +1,13 @@
 import { useState, useRef, useEffect, type RefObject } from 'react';
 import type { AnnotationData } from './AnnotationOverlay';
+import {
+  getSystemPrompt,
+  buildAnalysisPrompt,
+  getScoringHint,
+  MEDICAL_DISCLAIMER,
+  type ClinicalContext,
+} from '../lib/promptTemplates';
+import { renderMarkdown } from '../lib/markdownRenderer';
 
 interface SeriesInfo {
   seriesUID: string;
@@ -27,34 +35,28 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-const AI_MODELS = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google' },
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
-  { id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'anthropic' },
-];
-
 export default function AIPanel({ hasImages, activeSeries, imageIndex, viewMode, activePhoto, activeVideo, videoRef, annotationData, onAnnotationConsumed }: AIPanelProps) {
-  const [model, setModel] = useState('gemini-2.5-flash');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'system',
-      content: 'RadAssist AI hazır. DICOM görüntüsü yükleyin ve analiz için gönderin.',
+      content: 'RadAssist AI hazir. Goruntu yukleyin ve analiz icin gonderin.',
       timestamp: new Date(),
     },
   ]);
   const [inputText, setInputText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const SYSTEM_PROMPT = `Sen deneyimli bir radyolog asistanısın. Türkçe yanıt ver. 
-Görüntü tıbbi bir DICOM görüntüsü olabileceği gibi, ekran görüntüsü, telefon fotoğrafı veya başka bir görüntü de olabilir.
-Tıbbi görüntüler için:
-1. Görüntü kalitesi ve teknik değerlendirme
-2. Anatomi ve normal yapılar
-3. Patolojik bulgular (varsa)
-4. Öneriler
-formatında sistematik rapor hazırla. Klinik korelasyon öner.
-Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
+  // Clinical context
+  const [showContext, setShowContext] = useState(false);
+  const [clinicalContext, setClinicalContext] = useState<ClinicalContext>({
+    age: '',
+    gender: '',
+    complaint: '',
+    history: '',
+    clinicalQuestion: '',
+  });
+
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -71,29 +73,35 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
         ? (annotationData.drawingDataUrl || annotationData.fullImageWithAnnotation)
         : annotationData.fullImageWithAnnotation;
 
-      const regionInfo = annotationData.hasDrawing
-        ? `İşaretlenmiş bölge (${annotationData.organLabel})`
-        : annotationData.organLabel;
+      const modality = activeSeries?.modality;
+      const systemPrompt = getSystemPrompt(modality);
 
-      let prompt: string;
-      if (annotationData.organ === 'general') {
-        prompt = 'Bu tıbbi görüntüyü genel olarak analiz et. Sistematik bir radyoloji raporu hazırla.';
-      } else if (annotationData.hasDrawing) {
-        prompt = `Bu görüntüde ${annotationData.organLabel} bölgesinde işaretlenmiş alanı analiz et. İşaretli bölgedeki bulguları detaylı değerlendir. Patoloji varsa tanımla, yoksa normal olarak raporla.`;
-      } else {
-        prompt = `Bu görüntüde ${annotationData.organLabel} bölgesine odaklanarak analiz et. Bu organa/bölgeye özgü bulguları değerlendir.`;
-      }
+      const prompt = buildAnalysisPrompt({
+        modality,
+        seriesDescription: activeSeries?.description,
+        organLabel: annotationData.organLabel,
+        hasDrawing: annotationData.hasDrawing,
+        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+      });
+
+      // Add scoring hint if applicable
+      const scoringHint = getScoringHint(annotationData.organ, modality);
+      const fullPrompt = scoringHint ? `${prompt}\n\n${scoringHint}` : prompt;
+
+      const regionInfo = annotationData.hasDrawing
+        ? `Isaretlenmis bolge (${annotationData.organLabel})`
+        : annotationData.organLabel;
 
       setMessages((prev) => [
         ...prev,
         {
           role: 'user',
-          content: `🎯 Hedefli analiz: ${regionInfo}${annotationData.hasDrawing ? ' (çizimli)' : ''}`,
+          content: `Hedefli analiz: ${regionInfo}${annotationData.hasDrawing ? ' (cizimli)' : ''}`,
           timestamp: new Date(),
         },
       ]);
 
-      const result = await analyzeWithGemini(prompt, imageToSend);
+      const result = await analyzeWithGemini(fullPrompt, imageToSend, systemPrompt);
 
       setMessages((prev) => [
         ...prev,
@@ -107,9 +115,12 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
     runAnnotationAnalysis();
   }, [annotationData]);
 
+  const hasClinicalContext = () => {
+    return !!(clinicalContext.age || clinicalContext.gender || clinicalContext.complaint || clinicalContext.history || clinicalContext.clinicalQuestion);
+  };
+
   const captureViewport = async (): Promise<string | null> => {
     try {
-      // If viewing a video, capture current frame
       if (viewMode === 'video' && videoRef.current) {
         const video = videoRef.current;
         const canvas = document.createElement('canvas');
@@ -120,7 +131,6 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
         ctx.drawImage(video, 0, 0);
         return canvas.toDataURL('image/png').split(',')[1];
       }
-      // If viewing a photo, convert it to base64
       if (viewMode === 'photo' && activePhoto?.file) {
         return new Promise((resolve) => {
           const reader = new FileReader();
@@ -132,7 +142,6 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
           reader.readAsDataURL(activePhoto.file);
         });
       }
-      // DICOM viewport canvas capture
       const canvas = document.querySelector('.viewport-element canvas') as HTMLCanvasElement;
       if (!canvas) return null;
       return canvas.toDataURL('image/png').split(',')[1];
@@ -141,7 +150,20 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
     }
   };
 
-  const analyzeWithGemini = async (prompt: string, imageBase64: string | null) => {
+  // Build conversation history for Gemini multi-turn
+  const buildConversationHistory = () => {
+    const history: { role: string; parts: { text: string }[] }[] = [];
+    for (const msg of messages) {
+      if (msg.role === 'system') continue;
+      history.push({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }],
+      });
+    }
+    return history;
+  };
+
+  const analyzeWithGemini = async (prompt: string, imageBase64: string | null, systemPrompt?: string) => {
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -149,7 +171,8 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
         body: JSON.stringify({
           prompt,
           imageBase64,
-          systemPrompt: SYSTEM_PROMPT,
+          systemPrompt: systemPrompt || getSystemPrompt(activeSeries?.modality),
+          history: buildConversationHistory(),
         }),
       });
 
@@ -161,9 +184,9 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
       if (data.error) {
         return `Hata: ${data.error}`;
       }
-      return 'Yanıt alınamadı.';
+      return 'Yanit alinamadi.';
     } catch (err) {
-      return `Bağlantı hatası: ${(err as Error).message}`;
+      return `Baglanti hatasi: ${(err as Error).message}`;
     }
   };
 
@@ -172,22 +195,31 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
     setAnalyzing(true);
 
     const imageBase64 = await captureViewport();
+    const modality = activeSeries?.modality;
+    const systemPrompt = getSystemPrompt(modality);
 
     let prompt: string;
     let userMessage: string;
 
     if (viewMode === 'video' && activeVideo) {
-      prompt = `Bu video karesini analiz et. Video: ${activeVideo.name}. Tıbbi bir görüntüyse radyoloji raporu hazırla, değilse içeriği açıkla.`;
-      userMessage = `🔍 Video karesi analizi başlatıldı (${activeVideo.name})`;
+      prompt = buildAnalysisPrompt({
+        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+      });
+      userMessage = `Goruntu analizi baslatildi (Video: ${activeVideo.name})`;
     } else if (viewMode === 'photo' && activePhoto) {
-      prompt = `Bu görüntüyü analiz et. Dosya adı: ${activePhoto.name}. Tıbbi bir görüntüyse radyoloji raporu hazırla, değilse içeriği açıkla.`;
-      userMessage = `🔍 Fotoğraf analizi başlatıldı (${activePhoto.name})`;
+      prompt = buildAnalysisPrompt({
+        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+      });
+      userMessage = `Goruntu analizi baslatildi (${activePhoto.name})`;
     } else {
-      const seriesInfo = activeSeries
-        ? `Modalite: ${activeSeries.modality}, Seri: ${activeSeries.description}, Kesit: ${imageIndex + 1}/${activeSeries.instanceCount}`
-        : '';
-      prompt = `Bu radyolojik görüntüyü analiz et. ${seriesInfo}. Sistematik bir radyoloji raporu hazırla.`;
-      userMessage = `🔍 Görüntü analizi başlatıldı (${activeSeries?.modality || 'DICOM'} - Kesit ${imageIndex + 1})`;
+      prompt = buildAnalysisPrompt({
+        modality,
+        seriesDescription: activeSeries?.description,
+        imageIndex,
+        totalImages: activeSeries?.instanceCount,
+        clinicalContext: hasClinicalContext() ? clinicalContext : undefined,
+      });
+      userMessage = `Goruntu analizi baslatildi (${modality || 'DICOM'} - Kesit ${imageIndex + 1})`;
     }
 
     setMessages((prev) => [
@@ -195,7 +227,7 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
       { role: 'user', content: userMessage, timestamp: new Date() },
     ]);
 
-    const result = await analyzeWithGemini(prompt, imageBase64);
+    const result = await analyzeWithGemini(prompt, imageBase64, systemPrompt);
 
     setMessages((prev) => [
       ...prev,
@@ -220,16 +252,16 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
     const imageBase64 = hasImages ? await captureViewport() : null;
     let context: string;
     if (viewMode === 'video' && activeVideo) {
-      context = `Mevcut görüntü: Video karesi - ${activeVideo.name}`;
+      context = `Mevcut goruntu: Video karesi - ${activeVideo.name}`;
     } else if (viewMode === 'photo' && activePhoto) {
-      context = `Mevcut görüntü: Fotoğraf - ${activePhoto.name}`;
+      context = `Mevcut goruntu: Fotograf - ${activePhoto.name}`;
     } else if (activeSeries) {
-      context = `Mevcut görüntü: ${activeSeries.modality} - ${activeSeries.description}, Kesit ${imageIndex + 1}/${activeSeries.instanceCount}`;
+      context = `Mevcut goruntu: ${activeSeries.modality} - ${activeSeries.description}, Kesit ${imageIndex + 1}/${activeSeries.instanceCount}`;
     } else {
-      context = 'Henüz görüntü yüklenmemiş';
+      context = 'Henuz goruntu yuklenmemis';
     }
 
-    const prompt = `${context}\n\nKullanıcı sorusu: ${userMsg}`;
+    const prompt = `${context}\n\nKullanici sorusu: ${userMsg}`;
     const result = await analyzeWithGemini(prompt, imageBase64);
 
     setMessages((prev) => [
@@ -247,6 +279,27 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
     }
   };
 
+  const contextFieldStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '6px 8px',
+    borderRadius: 6,
+    border: '1px solid var(--border)',
+    background: 'var(--bg-tertiary)',
+    color: 'var(--text-primary)',
+    fontSize: 12,
+    fontFamily: "'Plus Jakarta Sans', sans-serif",
+    outline: 'none',
+    boxSizing: 'border-box',
+  };
+
+  const contextLabelStyle: React.CSSProperties = {
+    fontSize: 10,
+    color: 'var(--text-muted)',
+    fontWeight: 600,
+    marginBottom: 2,
+    display: 'block',
+  };
+
   return (
     <div className="ai-panel">
       <div className="ai-panel-header">
@@ -255,23 +308,163 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
             <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
           </svg>
           AI Asistan
-          <span className="ai-badge">BETA</span>
+          <span style={{
+            fontSize: 9, padding: '2px 6px', borderRadius: 4,
+            background: 'rgba(6,182,212,0.15)', color: '#06b6d4',
+            fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+          }}>
+            Gemini 2.5 Flash
+          </span>
         </h2>
       </div>
 
       <div className="ai-panel-body">
-        {/* Model selector */}
-        <select
-          className="ai-model-select"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
+        {/* Disclaimer */}
+        <div style={{
+          padding: '6px 10px',
+          borderRadius: 8,
+          background: 'rgba(245,158,11,0.1)',
+          border: '1px solid rgba(245,158,11,0.2)',
+          fontSize: 10,
+          color: '#fbbf24',
+          lineHeight: 1.4,
+          marginBottom: 10,
+        }}>
+          {MEDICAL_DISCLAIMER}
+        </div>
+
+        {/* Clinical Context Toggle */}
+        <button
+          onClick={() => setShowContext(!showContext)}
+          style={{
+            width: '100%',
+            padding: '7px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: hasClinicalContext() ? 'rgba(34,197,94,0.1)' : 'var(--bg-tertiary)',
+            color: hasClinicalContext() ? '#22c55e' : 'var(--text-secondary)',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontFamily: "'Plus Jakarta Sans', sans-serif",
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 8,
+          }}
         >
-          {AI_MODELS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
+          <span>
+            {hasClinicalContext() ? 'Klinik Bilgi Girildi' : 'Klinik Bilgi Ekle'}
+            {hasClinicalContext() && ' (aktif)'}
+          </span>
+          <span style={{ fontSize: 10 }}>{showContext ? '▲' : '▼'}</span>
+        </button>
+
+        {/* Clinical Context Form */}
+        {showContext && (
+          <div style={{
+            padding: 10,
+            borderRadius: 8,
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            marginBottom: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={contextLabelStyle}>Yas</label>
+                <input
+                  type="text"
+                  placeholder="ornek: 45"
+                  value={clinicalContext.age}
+                  onChange={(e) => setClinicalContext({ ...clinicalContext, age: e.target.value })}
+                  style={contextFieldStyle}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={contextLabelStyle}>Cinsiyet</label>
+                <select
+                  value={clinicalContext.gender}
+                  onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as ClinicalContext['gender'] })}
+                  style={contextFieldStyle}
+                >
+                  <option value="">Seciniz</option>
+                  <option value="male">Erkek</option>
+                  <option value="female">Kadin</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={contextLabelStyle}>Sikayet / Semptom</label>
+              <input
+                type="text"
+                placeholder="ornek: bas agrisi, bulanti, 2 haftadir"
+                value={clinicalContext.complaint}
+                onChange={(e) => setClinicalContext({ ...clinicalContext, complaint: e.target.value })}
+                style={contextFieldStyle}
+              />
+            </div>
+            <div>
+              <label style={contextLabelStyle}>Ozgecmis / Ek hastalik</label>
+              <input
+                type="text"
+                placeholder="ornek: DM, HT, bilinen kitle"
+                value={clinicalContext.history}
+                onChange={(e) => setClinicalContext({ ...clinicalContext, history: e.target.value })}
+                style={contextFieldStyle}
+              />
+            </div>
+            <div>
+              <label style={contextLabelStyle}>Klinik Soru (opsiyonel)</label>
+              <input
+                type="text"
+                placeholder="ornek: metastaz var mi? lezyon karakteri?"
+                value={clinicalContext.clinicalQuestion}
+                onChange={(e) => setClinicalContext({ ...clinicalContext, clinicalQuestion: e.target.value })}
+                style={contextFieldStyle}
+              />
+            </div>
+            <button
+              onClick={() => {
+                setClinicalContext({ age: '', gender: '', complaint: '', history: '', clinicalQuestion: '' });
+              }}
+              style={{
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text-muted)',
+                fontSize: 10,
+                cursor: 'pointer',
+                alignSelf: 'flex-end',
+              }}
+            >
+              Temizle
+            </button>
+          </div>
+        )}
+
+        {/* Modality Badge */}
+        {activeSeries?.modality && (
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '3px 8px',
+            borderRadius: 4,
+            background: 'rgba(139,92,246,0.15)',
+            color: '#a78bfa',
+            fontSize: 10,
+            fontWeight: 600,
+            fontFamily: "'JetBrains Mono', monospace",
+            marginBottom: 8,
+          }}>
+            Modalite: {activeSeries.modality}
+            {activeSeries.description && ` | ${activeSeries.description}`}
+          </div>
+        )}
 
         {/* Analyze button */}
         <button
@@ -285,7 +478,7 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
               Analiz ediliyor...
             </span>
           ) : (
-            '🔬 Görüntüyü Analiz Et'
+            'Goruntuyu Analiz Et'
           )}
         </button>
 
@@ -321,13 +514,12 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
               ) : (
                 <div className="ai-result">
                   <div className="ai-result-title">
-                    {AI_MODELS.find((m) => m.id === model)?.name || 'AI'} Yanıtı
+                    Gemini 2.5 Flash
                   </div>
-                  <div className="ai-result-text">
-                    {msg.content.split('\n').map((line, j) => (
-                      <p key={j}>{line}</p>
-                    ))}
-                  </div>
+                  <div
+                    className="ai-result-text ai-markdown"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+                  />
                 </div>
               )}
             </div>
@@ -340,14 +532,14 @@ Tıbbi olmayan görüntüler için: İçeriği analiz et ve açıkla.`;
       <div className="ai-chat-input">
         <input
           type="text"
-          placeholder="Görüntü hakkında soru sor..."
+          placeholder="Takip sorusu sor..."
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={analyzing}
         />
         <button onClick={handleSend} disabled={analyzing || !inputText.trim()}>
-          Gönder
+          Gonder
         </button>
       </div>
     </div>

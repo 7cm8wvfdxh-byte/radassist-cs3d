@@ -25,29 +25,50 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const { prompt, imageBase64, systemPrompt } = req.body;
+    const { prompt, imageBase64, systemPrompt, history } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: 'prompt is required' });
     }
 
-    // Build Gemini request parts
-    const parts: any[] = [];
+    // Build current message parts
+    const currentParts: any[] = [];
     if (imageBase64) {
-      parts.push({
+      currentParts.push({
         inlineData: {
           mimeType: 'image/png',
           data: imageBase64,
         },
       });
     }
-    parts.push({ text: prompt });
+    currentParts.push({ text: prompt });
+
+    // Build contents array with conversation history
+    const contents: any[] = [];
+
+    // Add previous conversation turns (if any)
+    if (Array.isArray(history) && history.length > 0) {
+      // Keep last 10 turns to stay within token limits
+      const recentHistory = history.slice(-10);
+      for (const turn of recentHistory) {
+        contents.push({
+          role: turn.role,
+          parts: turn.parts,
+        });
+      }
+    }
+
+    // Add current user message
+    contents.push({
+      role: 'user',
+      parts: currentParts,
+    });
 
     const body: any = {
-      contents: [{ parts }],
+      contents,
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 8192,
       },
     };
 
