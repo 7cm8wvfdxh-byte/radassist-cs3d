@@ -1,16 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  initCornerstone,
-  createToolGroup,
-  setActiveTool,
-  loadDicomFiles,
-  parseDicomMetadata,
-  cornerstone,
-  RENDERING_ENGINE_ID,
-} from './lib/initCornerstone';
-import { setUser, logFileUpload, logToolUse } from './lib/logger';
+import { useState, useEffect, useCallback } from 'react';
+import { setUser } from './lib/logger';
 import { captureCurrentView } from './lib/mediaCapture';
-import type { SeriesInfo, PatientInfo, AnnotationData, ViewMode, MediaFile } from './types';
+import type { AnnotationData } from './types';
+import { useDicomViewer } from './hooks/useDicomViewer';
+import { useFileUpload } from './hooks/useFileUpload';
 import ToolRail from './components/ToolRail';
 import SeriesSidebar from './components/SeriesSidebar';
 import ServerPanel from './components/ServerPanel';
@@ -22,7 +15,6 @@ import MobileApp from './components/MobileApp';
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(() => {
-    // Check if already authenticated in this session
     if (sessionStorage.getItem('ra_auth') === '1') {
       const savedUser = sessionStorage.getItem('ra_user') || '';
       if (savedUser) setUser(savedUser);
@@ -32,33 +24,23 @@ export default function App() {
   });
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
-  const [csReady, setCsReady] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [activeTool, setActiveToolState] = useState('WindowLevel');
-  const [series, setSeries] = useState<SeriesInfo[]>([]);
-  const [activeSeries, setActiveSeries] = useState<number>(0);
-  const [patient, setPatient] = useState<PatientInfo | null>(null);
-  const [imageIndex, setImageIndex] = useState(0);
-  const [totalImages, setTotalImages] = useState(0);
-  const [wwwl, setWwwl] = useState({ ww: 0, wl: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [dragging, setDragging] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 768);
   const [aiOpen, setAiOpen] = useState(() => window.innerWidth > 768);
   const [sidebarMode, setSidebarMode] = useState<'local' | 'server'>('local');
-  const [viewMode, setViewMode] = useState<ViewMode>('dicom');
-  const [photos, setPhotos] = useState<MediaFile[]>([]);
-  const [activePhoto, setActivePhoto] = useState(0);
-  const [videos, setVideos] = useState<MediaFile[]>([]);
-  const [activeVideo, setActiveVideo] = useState(0);
   const [annotationOpen, setAnnotationOpen] = useState(false);
   const [lastAnnotation, setLastAnnotation] = useState<AnnotationData | null>(null);
 
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const renderingEngineRef = useRef<any>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const mobileFileInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  // DICOM viewer hook — Cornerstone3D init, viewport, tools
+  const viewer = useDicomViewer();
+
+  // File upload hook — file classification, drag-drop, series management
+  const upload = useFileUpload({
+    csReady: viewer.csReady,
+    groupBySeries: viewer.groupBySeries,
+    buildSeriesList: viewer.buildSeriesList,
+    displaySeries: viewer.displaySeries,
+    viewportReady: !!viewer.viewportRef.current,
+  });
 
   // Mobile detection
   useEffect(() => {
@@ -67,372 +49,22 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Initialize Cornerstone3D
+  // Sync totalImages when series changes
   useEffect(() => {
-    (async () => {
-      try {
-        await initCornerstone();
-        setCsReady(true);
-      } catch (err) {
-        console.error('Cornerstone init failed:', err);
-      }
-    })();
-  }, []);
-
-  // Group DICOM files by series
-  const groupBySeries = useCallback(
-    (imageIds: string[]): Map<string, string[]> => {
-      const groups = new Map<string, string[]>();
-      for (const id of imageIds) {
-        const meta = cornerstone.metaData.get('generalSeriesModule', id);
-        const uid = meta?.seriesInstanceUID || 'unknown';
-        if (!groups.has(uid)) groups.set(uid, []);
-        groups.get(uid)!.push(id);
-      }
-      return groups;
-    },
-    []
-  );
-
-  // Load files handler
-  const handleFiles = useCallback(
-    async (files: FileList | File[]) => {
-      if (!csReady) return;
-      setLoading(true);
-
-      try {
-        const allFiles = Array.from(files);
-
-        // Separate DICOM files from regular images and videos
-        const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.tif'];
-        const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff'];
-        const videoExtensions = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v', '.ogv'];
-        const videoTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo', 'video/x-matroska', 'video/ogg'];
-
-        const regularImages = allFiles.filter(
-          (f) =>
-            imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext)) ||
-            imageTypes.includes(f.type)
-        );
-
-        const videoFiles = allFiles.filter(
-          (f) =>
-            videoExtensions.some((ext) => f.name.toLowerCase().endsWith(ext)) ||
-            videoTypes.includes(f.type)
-        );
-
-        const dcmFiles = allFiles.filter(
-          (f) =>
-            !regularImages.includes(f) &&
-            !videoFiles.includes(f) &&
-            (f.name.endsWith('.dcm') ||
-              f.name.endsWith('.DCM') ||
-              !f.name.includes('.') ||
-              f.type === 'application/dicom')
-        );
-
-        // Handle videos
-        if (videoFiles.length > 0) {
-          const videoList = videoFiles.map((f) => ({
-            url: URL.createObjectURL(f),
-            name: f.name,
-            file: f,
-          }));
-          setVideos((prev) => [...prev, ...videoList]);
-          setActiveVideo(videos.length);
-          setViewMode('video');
-          setLoading(false);
-          logFileUpload('video', videoFiles.length);
-
-          if (!patient) {
-            setPatient({
-              name: 'Video Yüklendi',
-              id: '',
-              studyDate: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
-              studyDescription: `${videoFiles.length} video`,
-            });
-          }
-          // Also process any images that came with the videos
-          if (regularImages.length > 0) {
-            const photoList = regularImages.map((f) => ({
-              url: URL.createObjectURL(f),
-              name: f.name,
-              file: f,
-            }));
-            setPhotos((prev) => [...prev, ...photoList]);
-          }
-          return;
-        }
-
-        // Handle regular images (screenshots, phone photos)
-        if (regularImages.length > 0) {
-          const photoList = regularImages.map((f) => ({
-            url: URL.createObjectURL(f),
-            name: f.name,
-            file: f,
-          }));
-          setPhotos((prev) => [...prev, ...photoList]);
-          setActivePhoto(photos.length); // Jump to first new photo
-          setViewMode('photo');
-          setLoading(false);
-          logFileUpload('photo', regularImages.length);
-          if (!patient) {
-            setPatient({
-              name: 'Görüntü Yüklendi',
-              id: '',
-              studyDate: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
-              studyDescription: `${regularImages.length} fotoğraf`,
-            });
-          }
-          return;
-        }
-
-        // Handle DICOM files
-        if (dcmFiles.length === 0) {
-          alert('Desteklenen dosya bulunamadı (.dcm, .jpg, .png, .mp4 vb.)');
-          setLoading(false);
-          return;
-        }
-
-        setViewMode('dicom');
-        const imageIds = await loadDicomFiles(dcmFiles);
-
-        // Force load first image to populate metadata
-        await cornerstone.imageLoader.loadAndCacheImage(imageIds[0]);
-
-        // Get patient info
-        const meta = parseDicomMetadata(imageIds[0]);
-        setPatient({
-          name: meta.patientName || 'Anonim',
-          id: meta.patientId || '',
-          studyDate: meta.studyDate || '',
-          studyDescription: meta.studyDescription || '',
-        });
-
-        // Group by series
-        const seriesGroups = groupBySeries(imageIds);
-        const seriesList: SeriesInfo[] = [];
-
-        for (const [uid, ids] of seriesGroups) {
-          const sMeta = cornerstone.metaData.get('generalSeriesModule', ids[0]);
-          seriesList.push({
-            seriesUID: uid,
-            description: sMeta?.seriesDescription || `Seri ${seriesList.length + 1}`,
-            modality: sMeta?.modality || 'OT',
-            imageIds: ids,
-            instanceCount: ids.length,
-          });
-        }
-
-        setSeries(seriesList);
-        setActiveSeries(0);
-        setTotalImages(seriesList[0]?.imageIds.length || 0);
-        setImageIndex(0);
-
-        // Display first series
-        if (seriesList.length > 0 && viewportRef.current) {
-          await displaySeries(seriesList[0].imageIds);
-        }
-      } catch (err) {
-        console.error('DICOM load error:', err);
-        alert('DICOM yükleme hatası: ' + (err as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [csReady, groupBySeries]
-  );
-
-  // Store event listener cleanup function
-  const cleanupListenersRef = useRef<(() => void) | null>(null);
-
-  // Display a series in the viewport
-  const displaySeries = async (imageIds: string[]) => {
-    if (!viewportRef.current) return;
-
-    // Clean up previous event listeners (fix memory leak)
-    if (cleanupListenersRef.current) {
-      cleanupListenersRef.current();
-      cleanupListenersRef.current = null;
-    }
-
-    // Destroy existing rendering engine
-    if (renderingEngineRef.current) {
-      renderingEngineRef.current.destroy();
-    }
-
-    const renderingEngine = new cornerstone.RenderingEngine(RENDERING_ENGINE_ID);
-    renderingEngineRef.current = renderingEngine;
-
-    const viewportId = 'STACK_VIEWPORT';
-
-    renderingEngine.enableElement({
-      viewportId,
-      type: cornerstone.Enums.ViewportType.STACK,
-      element: viewportRef.current,
-    });
-
-    // Setup tool group
-    const toolGroup = createToolGroup();
-    if (toolGroup) {
-      toolGroup.addViewport(viewportId, RENDERING_ENGINE_ID);
-    }
-
-    // Set the stack
-    const viewport = renderingEngine.getViewport(viewportId) as any;
-    await viewport.setStack(imageIds, 0);
-    viewport.render();
-
-    // Listen for events — store references for cleanup
-    const element = viewportRef.current;
-
-    const onStackNewImage = ((evt: any) => {
-      const { imageIdIndex } = evt.detail;
-      setImageIndex(imageIdIndex);
-    }) as EventListener;
-
-    const onVoiModified = ((evt: any) => {
-      const { range } = evt.detail;
-      if (range) {
-        const ww = Math.round(range.upper - range.lower);
-        const wl = Math.round((range.upper + range.lower) / 2);
-        setWwwl({ ww, wl });
-      }
-    }) as EventListener;
-
-    const onCameraModified = (() => {
-      try {
-        const cam = viewport.getCamera();
-        if (cam?.parallelScale) {
-          setZoom(1);
-        }
-      } catch {}
-    }) as EventListener;
-
-    element.addEventListener(cornerstone.Enums.Events.STACK_NEW_IMAGE, onStackNewImage);
-    element.addEventListener(cornerstone.Enums.Events.VOI_MODIFIED, onVoiModified);
-    element.addEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
-
-    // Store cleanup function
-    cleanupListenersRef.current = () => {
-      element.removeEventListener(cornerstone.Enums.Events.STACK_NEW_IMAGE, onStackNewImage);
-      element.removeEventListener(cornerstone.Enums.Events.VOI_MODIFIED, onVoiModified);
-      element.removeEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
-    };
-  };
-
-  // Series change
-  const handleSeriesChange = async (index: number) => {
-    setActiveSeries(index);
-    const s = series[index];
+    const s = upload.series[upload.activeSeries];
     if (s) {
-      setTotalImages(s.imageIds.length);
-      setImageIndex(0);
-      await displaySeries(s.imageIds);
+      viewer.setTotalImages(s.imageIds.length);
     }
-  };
-
-  // Tool change
-  const handleToolChange = (tool: string) => {
-    setActiveToolState(tool);
-    setActiveTool(tool);
-    logToolUse(tool);
-  };
-
-  // Reset viewport
-  const handleReset = () => {
-    if (!renderingEngineRef.current) return;
-    const viewport = renderingEngineRef.current.getViewport('STACK_VIEWPORT');
-    if (viewport) {
-      viewport.resetCamera();
-      viewport.resetProperties();
-      viewport.render();
-    }
-  };
-
-  // Drag & drop
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(true);
-  };
-  const handleDragLeave = () => setDragging(false);
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    if (e.dataTransfer.files.length > 0) {
-      handleFiles(e.dataTransfer.files);
-    }
-  };
-
-  // Folder upload support
-  const handleBrowse = () => {
-    if (isMobile && mobileFileInputRef.current) {
-      mobileFileInputRef.current.click();
-    } else if (fileInputRef.current) {
-      fileInputRef.current.click();
-    }
-  };
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFiles(e.target.files);
-    }
-  };
-
-  // WADO-RS: Load series from remote DICOMweb server
-  const handleServerLoadSeries = async (
-    imageIds: string[],
-    meta: {
-      patientName: string;
-      patientId: string;
-      studyDate: string;
-      studyDescription: string;
-      seriesDescription: string;
-      modality: string;
-      seriesUID: string;
-      instanceCount: number;
-    }
-  ) => {
-    if (!csReady || !viewportRef.current) return;
-    setLoading(true);
-
-    try {
-      setPatient({
-        name: meta.patientName || 'Anonim',
-        id: meta.patientId || '',
-        studyDate: meta.studyDate || '',
-        studyDescription: meta.studyDescription || '',
-      });
-
-      const newSeries: SeriesInfo = {
-        seriesUID: meta.seriesUID,
-        description: meta.seriesDescription || 'Uzak Seri',
-        modality: meta.modality || 'OT',
-        imageIds,
-        instanceCount: meta.instanceCount || imageIds.length,
-      };
-
-      setSeries([newSeries]);
-      setActiveSeries(0);
-      setTotalImages(imageIds.length);
-      setImageIndex(0);
-
-      await displaySeries(imageIds);
-    } catch (err) {
-      console.error('Server load error:', err);
-      alert('Sunucu yükleme hatası: ' + (err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [upload.series, upload.activeSeries]);
 
   // Capture current viewport/photo/video frame as base64 for annotation
   const captureBase = useCallback(async (): Promise<string | null> => {
     return captureCurrentView({
-      viewMode,
-      videoRef: videoRef.current,
-      activePhoto: photos[activePhoto] || null,
+      viewMode: upload.viewMode,
+      videoRef: upload.videoRef.current,
+      activePhoto: upload.photos[upload.activePhoto] || null,
     });
-  }, [viewMode, photos, activePhoto]);
+  }, [upload.viewMode, upload.photos, upload.activePhoto]);
 
   // Handle annotation analysis result
   const handleAnnotationAnalyze = (data: AnnotationData) => {
@@ -447,11 +79,6 @@ export default function App() {
   ]
     .filter(Boolean)
     .join(' ');
-
-  const hasImages = series.length > 0 || photos.length > 0 || videos.length > 0;
-  const hasDicom = series.length > 0;
-  const hasPhotos = photos.length > 0;
-  const hasVideos = videos.length > 0;
 
   // Password gate
   if (!authenticated) {
@@ -470,32 +97,32 @@ export default function App() {
 
       {/* Hidden file input with webkitdirectory for folder upload (desktop) */}
       <input
-        ref={fileInputRef}
+        ref={upload.fileInputRef}
         type="file"
         multiple
-        accept=".dcm,.DCM,application/dicom,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff,.tif,.mp4,.mov,.webm,.avi,.mkv,.m4v,image/*,video/*"
+        accept={upload.acceptedFiles}
         style={{ display: 'none' }}
-        onChange={handleFileInput}
+        onChange={upload.handleFileInput}
         {...({ webkitdirectory: '', directory: '' } as any)}
       />
       {/* Mobile file input — no webkitdirectory so individual files can be picked */}
       <input
-        ref={mobileFileInputRef}
+        ref={upload.mobileFileInputRef}
         type="file"
         multiple
-        accept=".dcm,.DCM,application/dicom,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff,.tif,.mp4,.mov,.webm,.avi,.mkv,.m4v,image/*,video/*"
+        accept={upload.acceptedFiles}
         style={{ display: 'none' }}
-        onChange={handleFileInput}
+        onChange={upload.handleFileInput}
       />
 
       {/* Tool Rail */}
       <ToolRail
-        activeTool={activeTool}
-        onToolChange={handleToolChange}
-        onReset={handleReset}
+        activeTool={viewer.activeTool}
+        onToolChange={viewer.handleToolChange}
+        onReset={viewer.handleReset}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         onToggleAI={() => setAiOpen(!aiOpen)}
-        hasImages={hasImages}
+        hasImages={upload.hasImages}
       />
 
       {/* Sidebar: Local files or Server connection */}
@@ -538,13 +165,13 @@ export default function App() {
 
           {sidebarMode === 'local' ? (
             <SeriesSidebar
-              patient={patient}
-              series={series}
-              activeSeries={activeSeries}
-              onSeriesChange={handleSeriesChange}
+              patient={upload.patient}
+              series={upload.series}
+              activeSeries={upload.activeSeries}
+              onSeriesChange={upload.handleSeriesChange}
             />
           ) : (
-            <ServerPanel onLoadSeries={handleServerLoadSeries} />
+            <ServerPanel onLoadSeries={upload.handleServerLoadSeries} />
           )}
         </div>
       )}
@@ -552,23 +179,23 @@ export default function App() {
       {/* Viewport */}
       <div
         className="viewport-area"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        onDragOver={upload.handleDragOver}
+        onDragLeave={upload.handleDragLeave}
+        onDrop={upload.handleDrop}
       >
         <div className="viewport-container">
-          {!hasImages && (
-            <div className={`drop-zone ${dragging ? 'dragging' : ''}`}>
+          {!upload.hasImages && (
+            <div className={`drop-zone ${upload.dragging ? 'dragging' : ''}`}>
               <div className="drop-zone-content">
                 <div className="drop-zone-icon">
                   <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
                   </svg>
                 </div>
-                <h3>Görüntü Yükle</h3>
-                <p>DICOM, fotoğraf veya video sürükleyip bırakın</p>
-                <button className="browse-btn" onClick={handleBrowse}>
-                  Dosya / Klasör Seç
+                <h3>Goruntu Yukle</h3>
+                <p>DICOM, fotograf veya video surukleyip birakin</p>
+                <button className="browse-btn" onClick={() => upload.handleBrowse(isMobile)}>
+                  Dosya / Klasor Sec
                 </button>
               </div>
             </div>
@@ -576,70 +203,62 @@ export default function App() {
 
           {/* DICOM Viewport */}
           <div
-            ref={viewportRef}
+            ref={viewer.viewportRef}
             className="viewport-element"
-            style={{ visibility: viewMode === 'dicom' && hasDicom ? 'visible' : 'hidden' }}
+            style={{ visibility: upload.viewMode === 'dicom' && upload.hasDicom ? 'visible' : 'hidden' }}
           />
 
           {/* Photo Viewer */}
-          {viewMode === 'photo' && hasPhotos && (
+          {upload.viewMode === 'photo' && upload.hasPhotos && (
             <div style={{
               position: 'absolute', inset: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: '#000',
             }}>
               <img
-                src={photos[activePhoto]?.url}
-                alt={photos[activePhoto]?.name}
+                src={upload.photos[upload.activePhoto]?.url}
+                alt={upload.photos[upload.activePhoto]?.name}
                 style={{
                   maxWidth: '100%', maxHeight: '100%',
                   objectFit: 'contain',
                 }}
               />
               {/* Photo navigation */}
-              {photos.length > 1 && (
+              {upload.photos.length > 1 && (
                 <>
                   <button
-                    onClick={() => setActivePhoto(Math.max(0, activePhoto - 1))}
-                    disabled={activePhoto === 0}
+                    onClick={() => upload.setActivePhoto(Math.max(0, upload.activePhoto - 1))}
+                    disabled={upload.activePhoto === 0}
                     style={{
                       position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
                       width: 36, height: 36, borderRadius: '50%',
                       border: 'none', background: 'rgba(255,255,255,0.15)',
                       color: 'white', cursor: 'pointer', fontSize: 18,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      opacity: activePhoto === 0 ? 0.3 : 1,
+                      opacity: upload.activePhoto === 0 ? 0.3 : 1,
                     }}
                   >
-                    ‹
+                    &lsaquo;
                   </button>
                   <button
-                    onClick={() => setActivePhoto(Math.min(photos.length - 1, activePhoto + 1))}
-                    disabled={activePhoto === photos.length - 1}
+                    onClick={() => upload.setActivePhoto(Math.min(upload.photos.length - 1, upload.activePhoto + 1))}
+                    disabled={upload.activePhoto === upload.photos.length - 1}
                     style={{
                       position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
                       width: 36, height: 36, borderRadius: '50%',
                       border: 'none', background: 'rgba(255,255,255,0.15)',
                       color: 'white', cursor: 'pointer', fontSize: 18,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      opacity: activePhoto === photos.length - 1 ? 0.3 : 1,
+                      opacity: upload.activePhoto === upload.photos.length - 1 ? 0.3 : 1,
                     }}
                   >
-                    ›
+                    &rsaquo;
                   </button>
                 </>
               )}
               {/* Delete photo button */}
               <button
-                onClick={() => {
-                  const newPhotos = photos.filter((_, i) => i !== activePhoto);
-                  setPhotos(newPhotos);
-                  if (newPhotos.length === 0) {
-                    setViewMode('dicom');
-                  } else {
-                    setActivePhoto(Math.min(activePhoto, newPhotos.length - 1));
-                  }
-                }}
+                onClick={() => upload.deletePhoto(upload.activePhoto)}
                 style={{
                   position: 'absolute', top: 12, right: 12,
                   width: 32, height: 32, borderRadius: 8,
@@ -647,15 +266,15 @@ export default function App() {
                   color: 'white', cursor: 'pointer', fontSize: 14,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}
-                title="Fotoğrafı kaldır"
+                title="Fotografu kaldir"
               >
-                ✕
+                &times;
               </button>
             </div>
           )}
 
           {/* Video Player */}
-          {viewMode === 'video' && hasVideos && (
+          {upload.viewMode === 'video' && upload.hasVideos && (
             <div style={{
               position: 'absolute', inset: 0,
               display: 'flex', flexDirection: 'column',
@@ -663,8 +282,8 @@ export default function App() {
             }}>
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 <video
-                  ref={videoRef}
-                  src={videos[activeVideo]?.url}
+                  ref={upload.videoRef}
+                  src={upload.videos[upload.activeVideo]?.url}
                   controls
                   style={{
                     maxWidth: '100%', maxHeight: '100%',
@@ -672,61 +291,42 @@ export default function App() {
                   }}
                 />
                 {/* Video navigation */}
-                {videos.length > 1 && (
+                {upload.videos.length > 1 && (
                   <>
                     <button
-                      onClick={() => setActiveVideo(Math.max(0, activeVideo - 1))}
-                      disabled={activeVideo === 0}
+                      onClick={() => upload.setActiveVideo(Math.max(0, upload.activeVideo - 1))}
+                      disabled={upload.activeVideo === 0}
                       style={{
                         position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
                         width: 36, height: 36, borderRadius: '50%',
                         border: 'none', background: 'rgba(255,255,255,0.15)',
                         color: 'white', cursor: 'pointer', fontSize: 18,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        opacity: activeVideo === 0 ? 0.3 : 1,
+                        opacity: upload.activeVideo === 0 ? 0.3 : 1,
                       }}
                     >
-                      ‹
+                      &lsaquo;
                     </button>
                     <button
-                      onClick={() => setActiveVideo(Math.min(videos.length - 1, activeVideo + 1))}
-                      disabled={activeVideo === videos.length - 1}
+                      onClick={() => upload.setActiveVideo(Math.min(upload.videos.length - 1, upload.activeVideo + 1))}
+                      disabled={upload.activeVideo === upload.videos.length - 1}
                       style={{
                         position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
                         width: 36, height: 36, borderRadius: '50%',
                         border: 'none', background: 'rgba(255,255,255,0.15)',
                         color: 'white', cursor: 'pointer', fontSize: 18,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        opacity: activeVideo === videos.length - 1 ? 0.3 : 1,
+                        opacity: upload.activeVideo === upload.videos.length - 1 ? 0.3 : 1,
                       }}
                     >
-                      ›
+                      &rsaquo;
                     </button>
                   </>
                 )}
                 {/* Delete & frame capture buttons */}
                 <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 6 }}>
                   <button
-                    onClick={() => {
-                      // Capture current frame as photo
-                      const video = videoRef.current;
-                      if (!video) return;
-                      const canvas = document.createElement('canvas');
-                      canvas.width = video.videoWidth;
-                      canvas.height = video.videoHeight;
-                      const ctx = canvas.getContext('2d');
-                      if (!ctx) return;
-                      ctx.drawImage(video, 0, 0);
-                      canvas.toBlob((blob) => {
-                        if (!blob) return;
-                        const file = new File([blob], `frame_${Date.now()}.png`, { type: 'image/png' });
-                        setPhotos((prev) => [...prev, {
-                          url: URL.createObjectURL(blob),
-                          name: file.name,
-                          file,
-                        }]);
-                      }, 'image/png');
-                    }}
+                    onClick={() => upload.captureFrameAsPhoto()}
                     style={{
                       height: 32, padding: '0 12px', borderRadius: 8,
                       border: 'none', background: 'rgba(6,182,212,0.8)',
@@ -734,29 +334,21 @@ export default function App() {
                       fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
                       display: 'flex', alignItems: 'center', gap: 4,
                     }}
-                    title="Mevcut kareyi fotoğraf olarak kaydet"
+                    title="Mevcut kareyi fotograf olarak kaydet"
                   >
-                    📸 Kare Yakala
+                    Kare Yakala
                   </button>
                   <button
-                    onClick={() => {
-                      const newVideos = videos.filter((_, i) => i !== activeVideo);
-                      setVideos(newVideos);
-                      if (newVideos.length === 0) {
-                        setViewMode(hasDicom ? 'dicom' : hasPhotos ? 'photo' : 'dicom');
-                      } else {
-                        setActiveVideo(Math.min(activeVideo, newVideos.length - 1));
-                      }
-                    }}
+                    onClick={() => upload.deleteVideo(upload.activeVideo)}
                     style={{
                       width: 32, height: 32, borderRadius: 8,
                       border: 'none', background: 'rgba(239,68,68,0.8)',
                       color: 'white', cursor: 'pointer', fontSize: 14,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}
-                    title="Videoyu kaldır"
+                    title="Videoyu kaldir"
                   >
-                    ✕
+                    &times;
                   </button>
                 </div>
               </div>
@@ -764,114 +356,114 @@ export default function App() {
           )}
 
           {/* Mode switcher when multiple content types exist */}
-          {((hasDicom ? 1 : 0) + (hasPhotos ? 1 : 0) + (hasVideos ? 1 : 0)) > 1 && (
+          {((upload.hasDicom ? 1 : 0) + (upload.hasPhotos ? 1 : 0) + (upload.hasVideos ? 1 : 0)) > 1 && (
             <div style={{
               position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
               display: 'flex', gap: 2, background: 'rgba(0,0,0,0.6)',
               borderRadius: 8, padding: 3, zIndex: 10,
             }}>
-              {hasDicom && (
+              {upload.hasDicom && (
                 <button
-                  onClick={() => setViewMode('dicom')}
+                  onClick={() => upload.setViewMode('dicom')}
                   style={{
                     padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
                     fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-                    background: viewMode === 'dicom' ? 'var(--accent)' : 'transparent',
-                    color: viewMode === 'dicom' ? 'white' : 'var(--text-muted)',
+                    background: upload.viewMode === 'dicom' ? 'var(--accent)' : 'transparent',
+                    color: upload.viewMode === 'dicom' ? 'white' : 'var(--text-muted)',
                   }}
                 >
                   DICOM
                 </button>
               )}
-              {hasPhotos && (
+              {upload.hasPhotos && (
                 <button
-                  onClick={() => setViewMode('photo')}
+                  onClick={() => upload.setViewMode('photo')}
                   style={{
                     padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
                     fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-                    background: viewMode === 'photo' ? 'var(--cyan)' : 'transparent',
-                    color: viewMode === 'photo' ? 'white' : 'var(--text-muted)',
+                    background: upload.viewMode === 'photo' ? 'var(--cyan)' : 'transparent',
+                    color: upload.viewMode === 'photo' ? 'white' : 'var(--text-muted)',
                   }}
                 >
-                  Fotoğraf ({photos.length})
+                  Fotograf ({upload.photos.length})
                 </button>
               )}
-              {hasVideos && (
+              {upload.hasVideos && (
                 <button
-                  onClick={() => setViewMode('video')}
+                  onClick={() => upload.setViewMode('video')}
                   style={{
                     padding: '4px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
                     fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
-                    background: viewMode === 'video' ? 'var(--purple)' : 'transparent',
-                    color: viewMode === 'video' ? 'white' : 'var(--text-muted)',
+                    background: upload.viewMode === 'video' ? 'var(--purple)' : 'transparent',
+                    color: upload.viewMode === 'video' ? 'white' : 'var(--text-muted)',
                   }}
                 >
-                  Video ({videos.length})
+                  Video ({upload.videos.length})
                 </button>
               )}
             </div>
           )}
 
           {/* Viewport overlays */}
-          {viewMode === 'dicom' && hasDicom && (
+          {upload.viewMode === 'dicom' && upload.hasDicom && (
             <>
               <div className="viewport-overlay top-left">
-                <div>{patient?.name}</div>
-                <div className="label">ID: {patient?.id}</div>
-                <div className="label">{patient?.studyDate}</div>
+                <div>{upload.patient?.name}</div>
+                <div className="label">ID: {upload.patient?.id}</div>
+                <div className="label">{upload.patient?.studyDate}</div>
               </div>
               <div className="viewport-overlay top-right">
-                <div>{series[activeSeries]?.modality}</div>
-                <div>{series[activeSeries]?.description}</div>
+                <div>{upload.series[upload.activeSeries]?.modality}</div>
+                <div>{upload.series[upload.activeSeries]?.description}</div>
               </div>
               <div className="viewport-overlay bottom-left">
-                <div>WW: {wwwl.ww} / WL: {wwwl.wl}</div>
-                <div>Zoom: {zoom}x</div>
+                <div>WW: {viewer.wwwl.ww} / WL: {viewer.wwwl.wl}</div>
+                <div>Zoom: {viewer.zoom}x</div>
               </div>
               <div className="viewport-overlay bottom-right">
                 <div>
-                  Img: {imageIndex + 1} / {totalImages}
+                  Img: {viewer.imageIndex + 1} / {viewer.totalImages}
                 </div>
               </div>
             </>
           )}
 
           {/* Photo overlay info */}
-          {viewMode === 'photo' && hasPhotos && (
+          {upload.viewMode === 'photo' && upload.hasPhotos && (
             <>
               <div className="viewport-overlay top-left">
-                <div>{photos[activePhoto]?.name}</div>
+                <div>{upload.photos[upload.activePhoto]?.name}</div>
               </div>
               <div className="viewport-overlay bottom-right">
                 <div>
-                  {activePhoto + 1} / {photos.length}
+                  {upload.activePhoto + 1} / {upload.photos.length}
                 </div>
               </div>
             </>
           )}
 
           {/* Video overlay info */}
-          {viewMode === 'video' && hasVideos && (
+          {upload.viewMode === 'video' && upload.hasVideos && (
             <>
               <div className="viewport-overlay top-left">
-                <div>{videos[activeVideo]?.name}</div>
+                <div>{upload.videos[upload.activeVideo]?.name}</div>
               </div>
               <div className="viewport-overlay bottom-right">
                 <div>
-                  {activeVideo + 1} / {videos.length}
+                  {upload.activeVideo + 1} / {upload.videos.length}
                 </div>
               </div>
             </>
           )}
 
-          {loading && (
+          {upload.loading && (
             <div className="loading-overlay">
               <div className="spinner" />
             </div>
           )}
 
           {/* Annotate button */}
-          {hasImages && !annotationOpen && (
+          {upload.hasImages && !annotationOpen && (
             <button
               onClick={() => setAnnotationOpen(true)}
               style={{
@@ -884,7 +476,7 @@ export default function App() {
                 zIndex: 8, backdropFilter: 'blur(8px)',
               }}
             >
-              ✏️ Bölge Seç & İşaretle
+              Bolge Sec & Isaretle
             </button>
           )}
 
@@ -900,27 +492,27 @@ export default function App() {
         {/* Status Bar */}
         <div className="status-bar">
           <div className="status-item">
-            <div className={`status-dot ${csReady ? '' : 'warning'}`} />
-            <span>{csReady ? 'Cornerstone3D Hazır' : 'Başlatılıyor...'}</span>
+            <div className={`status-dot ${viewer.csReady ? '' : 'warning'}`} />
+            <span>{viewer.csReady ? 'Cornerstone3D Hazir' : 'Baslatiliyor...'}</span>
           </div>
-          {hasDicom && (
+          {upload.hasDicom && (
             <>
               <div className="status-item">
-                <span>{series.length} seri</span>
+                <span>{upload.series.length} seri</span>
               </div>
               <div className="status-item">
-                <span>{totalImages} kesit</span>
+                <span>{viewer.totalImages} kesit</span>
               </div>
             </>
           )}
-          {hasPhotos && (
+          {upload.hasPhotos && (
             <div className="status-item">
-              <span>{photos.length} fotoğraf</span>
+              <span>{upload.photos.length} fotograf</span>
             </div>
           )}
-          {hasVideos && (
+          {upload.hasVideos && (
             <div className="status-item">
-              <span>{videos.length} video</span>
+              <span>{upload.videos.length} video</span>
             </div>
           )}
           <div style={{ flex: 1 }} />
@@ -932,7 +524,7 @@ export default function App() {
               cursor: 'pointer', fontFamily: "'JetBrains Mono', monospace",
             }}
           >
-            🐛 Hata Bildir
+            Hata Bildir
           </button>
           <div className="status-item">
             <span>RadAssist v2.0</span>
@@ -946,13 +538,13 @@ export default function App() {
       )}
       {aiOpen && (
         <AIPanel
-          hasImages={hasImages}
-          activeSeries={series[activeSeries] || null}
-          imageIndex={imageIndex}
-          viewMode={viewMode}
-          activePhoto={photos[activePhoto] || null}
-          activeVideo={videos[activeVideo] || null}
-          videoRef={videoRef}
+          hasImages={upload.hasImages}
+          activeSeries={upload.series[upload.activeSeries] || null}
+          imageIndex={viewer.imageIndex}
+          viewMode={upload.viewMode}
+          activePhoto={upload.photos[upload.activePhoto] || null}
+          activeVideo={upload.videos[upload.activeVideo] || null}
+          videoRef={upload.videoRef}
           annotationData={lastAnnotation}
           onAnnotationConsumed={() => setLastAnnotation(null)}
         />
