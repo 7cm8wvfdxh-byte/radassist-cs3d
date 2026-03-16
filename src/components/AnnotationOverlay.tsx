@@ -140,8 +140,28 @@ export default function AnnotationOverlay({
 
     const hasDrawing = allAnnotations.some((a) => a.paths.length > 0);
 
+    // Compress canvas to JPEG and resize if too large
+    const compressCanvas = (srcCanvas: HTMLCanvasElement): string => {
+      const MAX_DIM = 1536;
+      let { width, height } = srcCanvas;
+      if (width > MAX_DIM || height > MAX_DIM) {
+        const scale = MAX_DIM / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = width;
+        tmpCanvas.height = height;
+        const tmpCtx = tmpCanvas.getContext('2d');
+        if (tmpCtx) {
+          tmpCtx.drawImage(srcCanvas, 0, 0, width, height);
+          return tmpCanvas.toDataURL('image/jpeg', 0.82).split(',')[1];
+        }
+      }
+      return srcCanvas.toDataURL('image/jpeg', 0.82).split(',')[1];
+    };
+
     // Get canvas image with all annotations rendered
-    const fullImageWithAnnotation = canvasRef.current.toDataURL('image/png').split(',')[1];
+    const fullImageWithAnnotation = compressCanvas(canvasRef.current);
     let drawingDataUrl: string | null = null;
 
     // Crop to drawn region (all annotations combined)
@@ -158,7 +178,7 @@ export default function AnnotationOverlay({
         const cropCtx = cropCanvas.getContext('2d');
         if (cropCtx) {
           cropCtx.drawImage(canvasRef.current, minX, minY, maxX - minX, maxY - minY, 0, 0, maxX - minX, maxY - minY);
-          drawingDataUrl = cropCanvas.toDataURL('image/png').split(',')[1];
+          drawingDataUrl = compressCanvas(cropCanvas);
         }
       }
     }

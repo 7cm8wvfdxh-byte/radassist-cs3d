@@ -47,7 +47,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.length > MAX_IMAGE_SIZE_BYTES) {
-      return res.status(400).json({ error: 'Image too large (max ~15MB)' });
+      return res.status(400).json({ error: `Goruntu cok buyuk (${(imageBase64.length / 1_000_000).toFixed(1)}MB). Maksimum ~3MB.` });
     }
 
     // Build current message parts
@@ -120,7 +120,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (data.error) {
-      return res.status(500).json({ error: 'AI servisi gecici olarak kullanilamiyor' });
+      const geminiMsg = data.error.message || JSON.stringify(data.error);
+      console.error('Gemini API error:', geminiMsg);
+      return res.status(500).json({ error: `AI servisi hatasi: ${geminiMsg}` });
     }
 
     return res.status(500).json({ error: 'No response from Gemini' });
