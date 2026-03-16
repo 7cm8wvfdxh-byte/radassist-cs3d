@@ -9,18 +9,20 @@ import SeriesSidebar from './components/SeriesSidebar';
 import ServerPanel from './components/ServerPanel';
 import AnnotationOverlay from './components/AnnotationOverlay';
 import AIPanel from './components/AIPanel';
-import PasswordGate from './components/PasswordGate';
 import BugReport from './components/BugReport';
 import MobileApp from './components/MobileApp';
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(() => {
-    if (sessionStorage.getItem('ra_auth') === '1') {
-      const savedUser = sessionStorage.getItem('ra_user') || '';
-      if (savedUser) setUser(savedUser);
-      return true;
+  // Auto-authenticate — no login screen
+  const [authenticated] = useState(() => {
+    sessionStorage.setItem('ra_auth', '1');
+    if (!sessionStorage.getItem('ra_user')) {
+      sessionStorage.setItem('ra_user', 'Kullanici');
+      setUser('Kullanici');
+    } else {
+      setUser(sessionStorage.getItem('ra_user')!);
     }
-    return false;
+    return true;
   });
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
@@ -80,10 +82,8 @@ export default function App() {
     .filter(Boolean)
     .join(' ');
 
-  // Password gate
-  if (!authenticated) {
-    return <PasswordGate onAuthenticated={() => setAuthenticated(true)} />;
-  }
+  // Auth bypass — always authenticated
+  if (!authenticated) return null;
 
   // Mobile: simplified UI
   if (isMobile) {
