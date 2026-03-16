@@ -13,6 +13,7 @@ import {
   MEDICAL_DISCLAIMER,
 } from '../lib/promptTemplates';
 import { renderMarkdown } from '../lib/markdownRenderer';
+import { ORGAN_TREE, findStructure, type OrganCategory } from '../lib/organTree';
 
 export default function AIPanel({
   hasImages,
@@ -46,6 +47,8 @@ export default function AIPanel({
   const [inputText, setInputText] = useState('');
   const [selectedResponseType, setSelectedResponseType] = useState('report');
   const [manualModality, setManualModality] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<OrganCategory | null>(null);
+  const [selectedStructure, setSelectedStructure] = useState('general_full');
 
   const MODALITY_OPTIONS = [
     { value: '', label: 'Modalite Sec (opsiyonel)' },
@@ -138,6 +141,11 @@ export default function AIPanel({
     });
   };
 
+  // Resolve selected structure label
+  const resolvedStructure = findStructure(selectedStructure);
+  const structureLabel = resolvedStructure?.structure.label || 'Genel';
+  const isGeneralScan = selectedStructure === 'general_full';
+
   const handleAnalyze = async () => {
     if (!hasImages) return;
     setAnalyzing(true);
@@ -152,31 +160,45 @@ export default function AIPanel({
       ? MODALITY_OPTIONS.find((m) => m.value === modality)?.label || modality
       : undefined;
 
+    // Build organ-focused prompt prefix
+    const organFocus = !isGeneralScan
+      ? `Bu goruntude "${structureLabel}" yapisina/bolgesine odaklanarak analiz et. Bu bolgedeki normal ve patolojik bulgulari detayli degerlendir.\n\n`
+      : '';
+
     if (viewMode === 'video' && activeVideo) {
-      prompt = buildAnalysisPrompt({
+      prompt = organFocus + buildAnalysisPrompt({
         modality,
         clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (Video: ${activeVideo.name}${modalityLabel ? ` | ${modalityLabel}` : ''})`;
     } else if (viewMode === 'photo' && activePhoto) {
-      prompt = buildAnalysisPrompt({
+      prompt = organFocus + buildAnalysisPrompt({
         modality,
         clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (${activePhoto.name}${modalityLabel ? ` | ${modalityLabel}` : ''})`;
     } else {
-      prompt = buildAnalysisPrompt({
+      prompt = organFocus + buildAnalysisPrompt({
         modality,
         seriesDescription: activeSeries?.description,
         imageIndex,
         totalImages: activeSeries?.instanceCount,
+        organLabel: !isGeneralScan ? structureLabel : undefined,
         clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (${modality || 'DICOM'} - Kesit ${imageIndex + 1})`;
     }
 
+    // Add organ info to user message
+    if (!isGeneralScan) {
+      userMessage += ` [${selectedCategory?.icon || ''} ${structureLabel}]`;
+    }
+
+    const scoringHint = !isGeneralScan
+      ? getScoringHint(resolvedStructure?.category.id || '', modality)
+      : '';
     const responseInstruction = getResponseTypeInstruction(selectedResponseType);
-    const fullPrompt = prompt + responseInstruction;
+    const fullPrompt = (scoringHint ? `${prompt}\n\n${scoringHint}` : prompt) + responseInstruction;
 
     const responseLabel = RESPONSE_TYPES.find((r) => r.id === selectedResponseType)?.label;
     addUserMessage(`${userMessage} [${responseLabel}]`);
@@ -468,6 +490,99 @@ export default function AIPanel({
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+          </div>
+        )}
+
+        {/* Organ / Region Selector */}
+        {hasImages && (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{
+              fontSize: 10, color: 'var(--text-muted)', fontWeight: 600,
+              marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4,
+            }}>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+              </svg>
+              Bolge / Organ
+            </div>
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', gap: 3,
+            }}>
+              {ORGAN_TREE.map((cat) => {
+                const isSelected = selectedCategory?.id === cat.id || (cat.id === 'general' && selectedStructure === 'general_full' && !selectedCategory);
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => {
+                      if (cat.id === 'general') {
+                        setSelectedCategory(null);
+                        setSelectedStructure('general_full');
+                      } else if (selectedCategory?.id === cat.id) {
+                        setSelectedCategory(null);
+                        setSelectedStructure('general_full');
+                      } else {
+                        setSelectedCategory(cat);
+                        setSelectedStructure(cat.structures[0].id);
+                      }
+                    }}
+                    style={{
+                      padding: '3px 7px',
+                      borderRadius: 6,
+                      border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                      background: isSelected ? 'var(--accent-glow)' : 'var(--bg-tertiary)',
+                      color: isSelected ? 'var(--accent)' : 'var(--text-secondary)',
+                      fontSize: 11,
+                      fontWeight: isSelected ? 600 : 400,
+                      cursor: 'pointer',
+                      fontFamily: "'Plus Jakarta Sans', sans-serif",
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <span style={{ fontSize: 12 }}>{cat.icon}</span>
+                    {cat.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Sub-structure selector */}
+            {selectedCategory && selectedCategory.id !== 'general' && (
+              <div style={{
+                marginTop: 6, padding: 6,
+                borderRadius: 6,
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+                display: 'flex', flexWrap: 'wrap', gap: 3,
+              }}>
+                {selectedCategory.structures.map((s) => {
+                  const isSel = selectedStructure === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => setSelectedStructure(s.id)}
+                      style={{
+                        padding: '3px 7px',
+                        borderRadius: 4,
+                        border: `1px solid ${isSel ? 'var(--accent)' : 'transparent'}`,
+                        background: isSel ? 'var(--accent-glow)' : 'transparent',
+                        color: isSel ? 'var(--accent)' : 'var(--text-secondary)',
+                        fontSize: 10,
+                        fontWeight: isSel ? 600 : 400,
+                        cursor: 'pointer',
+                        fontFamily: "'Plus Jakarta Sans', sans-serif",
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {s.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
