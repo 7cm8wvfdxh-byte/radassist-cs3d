@@ -44,19 +44,27 @@ function getHeaders(config: DICOMwebConfig): HeadersInit {
   return headers;
 }
 
+// DICOM JSON dataset type — loosely typed since DICOMweb responses vary
+interface DicomJsonEntry {
+  Value?: Array<string | number | { Alphabetic?: string }>;
+  vr?: string;
+}
+
+type DicomJsonDataset = Record<string, DicomJsonEntry>;
+
 // Clean tag value from DICOM JSON
-function tagValue(dataset: any, tag: string): string {
+function tagValue(dataset: DicomJsonDataset | null | undefined, tag: string): string {
   const entry = dataset?.[tag];
   if (!entry) return '';
   if (entry.Value) {
     const val = entry.Value[0];
-    if (typeof val === 'object' && val.Alphabetic) return val.Alphabetic;
+    if (typeof val === 'object' && val !== null && 'Alphabetic' in val) return (val as { Alphabetic: string }).Alphabetic;
     return String(val ?? '');
   }
   return '';
 }
 
-function tagNumber(dataset: any, tag: string): number {
+function tagNumber(dataset: DicomJsonDataset | null | undefined, tag: string): number {
   const entry = dataset?.[tag];
   if (!entry?.Value) return 0;
   return Number(entry.Value[0]) || 0;
@@ -101,7 +109,7 @@ export async function searchStudies(
 
   const data = await res.json();
 
-  return data.map((d: any) => ({
+  return (data as DicomJsonDataset[]).map((d) => ({
     studyInstanceUID: tagValue(d, '0020000D'),
     patientName: tagValue(d, '00100010'),
     patientId: tagValue(d, '00100020'),
@@ -125,7 +133,7 @@ export async function getStudySeries(
 
   const data = await res.json();
 
-  return data.map((d: any) => ({
+  return (data as DicomJsonDataset[]).map((d) => ({
     seriesInstanceUID: tagValue(d, '0020000E'),
     seriesDescription: tagValue(d, '0008103E'),
     seriesNumber: tagNumber(d, '00200011'),
@@ -148,7 +156,7 @@ export async function getWadoRsImageIds(
 
   const data = await res.json();
 
-  const imageIds = data.map((instance: any) => {
+  const imageIds = (data as DicomJsonDataset[]).map((instance) => {
     const sopInstanceUID = tagValue(instance, '00080018');
     return `wadors:${config.baseUrl}/studies/${studyInstanceUID}/series/${seriesInstanceUID}/instances/${sopInstanceUID}/frames/1`;
   });
@@ -169,17 +177,26 @@ export function getSavedServers(): DICOMwebConfig[] {
 }
 
 export function saveServer(config: DICOMwebConfig): void {
-  const servers = getSavedServers();
-  const existing = servers.findIndex((s) => s.name === config.name);
-  if (existing >= 0) {
-    servers[existing] = config;
-  } else {
-    servers.push(config);
+  try {
+    const servers = getSavedServers();
+    const existing = servers.findIndex((s) => s.name === config.name);
+    if (existing >= 0) {
+      servers[existing] = config;
+    } else {
+      servers.push(config);
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(servers));
+  } catch {
+    // QuotaExceededError or SecurityError — fail gracefully
+    console.warn('Could not save server config to localStorage');
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(servers));
 }
 
 export function removeServer(name: string): void {
-  const servers = getSavedServers().filter((s) => s.name !== name);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(servers));
+  try {
+    const servers = getSavedServers().filter((s) => s.name !== name);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(servers));
+  } catch {
+    console.warn('Could not update localStorage');
+  }
 }

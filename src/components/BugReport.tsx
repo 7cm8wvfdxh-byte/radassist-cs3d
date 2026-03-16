@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { getUser } from '../lib/logger';
+import { apiPost } from '../lib/httpClient';
 
 interface BugReportProps {
   visible: boolean;
@@ -26,14 +27,10 @@ export default function BugReport({ visible, onClose }: BugReportProps) {
     setSending(true);
 
     try {
-      await fetch('/api/bug-report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user: getUser(),
-          category,
-          description: description.trim(),
-        }),
+      await apiPost('/api/bug-report', {
+        user: getUser(),
+        category,
+        description: description.trim(),
       });
       setSent(true);
       setTimeout(() => {

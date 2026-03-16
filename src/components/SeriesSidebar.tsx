@@ -1,17 +1,4 @@
-interface SeriesInfo {
-  seriesUID: string;
-  description: string;
-  modality: string;
-  imageIds: string[];
-  instanceCount: number;
-}
-
-interface PatientInfo {
-  name: string;
-  id: string;
-  studyDate: string;
-  studyDescription: string;
-}
+import type { SeriesInfo, PatientInfo } from '../types';
 
 interface SeriesSidebarProps {
   patient: PatientInfo | null;

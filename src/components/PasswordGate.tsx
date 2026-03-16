@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { setUser, logLogin } from '../lib/logger';
+import { apiFetch } from '../lib/httpClient';
 
 interface PasswordGateProps {
   onAuthenticated: () => void;
@@ -17,15 +18,12 @@ export default function PasswordGate({ onAuthenticated }: PasswordGateProps) {
     setError('');
 
     try {
-      const res = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: password.trim() }),
+      const result = await apiFetch<{ ok?: boolean }>('/api/auth', {
+        body: { password: password.trim() },
+        skipAuth: true,
       });
 
-      const data = await res.json();
-
-      if (data.ok) {
+      if (result.data.ok) {
         const userName = name.trim() || 'Anonim';
         setUser(userName);
         sessionStorage.setItem('ra_auth', '1');

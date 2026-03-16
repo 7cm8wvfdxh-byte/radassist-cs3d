@@ -202,8 +202,10 @@ export function useFileUpload(opts: UseFileUploadOptions) {
     }
   };
 
-  // Delete photo
+  // Delete photo — revoke objectURL to prevent memory leak
   const deletePhoto = (index: number) => {
+    const removed = photos[index];
+    if (removed) URL.revokeObjectURL(removed.url);
     const newPhotos = photos.filter((_, i) => i !== index);
     setPhotos(newPhotos);
     if (newPhotos.length === 0) {
@@ -213,8 +215,10 @@ export function useFileUpload(opts: UseFileUploadOptions) {
     }
   };
 
-  // Delete video
+  // Delete video — revoke objectURL to prevent memory leak
   const deleteVideo = (index: number) => {
+    const removed = videos[index];
+    if (removed) URL.revokeObjectURL(removed.url);
     const newVideos = videos.filter((_, i) => i !== index);
     setVideos(newVideos);
     if (newVideos.length === 0) {
@@ -223,6 +227,12 @@ export function useFileUpload(opts: UseFileUploadOptions) {
       setActiveVideo(Math.min(index, newVideos.length - 1));
     }
   };
+
+  // Cleanup all objectURLs (call on unmount or full reset)
+  const revokeAllUrls = useCallback(() => {
+    photos.forEach((p) => URL.revokeObjectURL(p.url));
+    videos.forEach((v) => URL.revokeObjectURL(v.url));
+  }, [photos, videos]);
 
   // Capture frame from video as photo
   const captureFrameAsPhoto = () => {
@@ -259,6 +269,6 @@ export function useFileUpload(opts: UseFileUploadOptions) {
     // Handlers
     handleFiles, handleSeriesChange, handleDragOver, handleDragLeave, handleDrop,
     handleBrowse, handleFileInput, handleServerLoadSeries,
-    deletePhoto, deleteVideo, captureFrameAsPhoto,
+    deletePhoto, deleteVideo, captureFrameAsPhoto, revokeAllUrls,
   };
 }
