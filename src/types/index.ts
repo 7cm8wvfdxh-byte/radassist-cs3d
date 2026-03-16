@@ -85,6 +85,7 @@ export interface AIPanelProps {
   viewMode: ViewMode;
   activePhoto: MediaFile | null;
   activeVideo: MediaFile | null;
+  photos: MediaFile[];
   videoRef: RefObject<HTMLVideoElement | null>;
   annotationData: AnnotationData | null;
   onAnnotationConsumed: () => void;

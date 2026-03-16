@@ -544,6 +544,7 @@ export default function App() {
           viewMode={upload.viewMode}
           activePhoto={upload.photos[upload.activePhoto] || null}
           activeVideo={upload.videos[upload.activeVideo] || null}
+          photos={upload.photos}
           videoRef={upload.videoRef}
           annotationData={lastAnnotation}
           onAnnotationConsumed={() => setLastAnnotation(null)}

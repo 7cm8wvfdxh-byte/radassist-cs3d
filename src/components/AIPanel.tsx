@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { AIPanelProps } from '../types';
-import { captureCurrentView } from '../lib/mediaCapture';
+import { captureCurrentView, compressImageForAI } from '../lib/mediaCapture';
 import { analyzeWithGemini, buildConversationHistory } from '../lib/geminiClient';
 import { useGeminiChat } from '../hooks/useGeminiChat';
 import { useClinicalContext } from '../hooks/useClinicalContext';
@@ -22,6 +22,7 @@ export default function AIPanel({
   viewMode,
   activePhoto,
   activeVideo,
+  photos,
   videoRef,
   annotationData,
   onAnnotationConsumed,
@@ -49,6 +50,7 @@ export default function AIPanel({
   const [manualModality, setManualModality] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<OrganCategory | null>(null);
   const [selectedStructure, setSelectedStructure] = useState('general_full');
+  const [gridPreview, setGridPreview] = useState<string | null>(null);
 
   const MODALITY_OPTIONS = [
     { value: '', label: 'Modalite Sec (opsiyonel)' },
@@ -66,6 +68,79 @@ export default function AIPanel({
 
   // Effective modality: DICOM metadata or manual selection
   const effectiveModality = activeSeries?.modality || manualModality || undefined;
+
+  // Multiple photos → combine into a single grid image
+  const hasMultiplePhotos = viewMode === 'photo' && photos.length > 1;
+
+  const buildPhotoGrid = async (): Promise<string | null> => {
+    if (photos.length === 0) return null;
+    if (photos.length === 1 && photos[0].file) return compressImageForAI(photos[0].file);
+
+    // Load all photos as images
+    const images = await Promise.all(
+      photos.map((p) =>
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = p.url;
+        })
+      )
+    );
+
+    const count = images.length;
+    const cols = count <= 2 ? 2 : count <= 4 ? 2 : 3;
+    const rows = Math.ceil(count / cols);
+    const cellW = 512;
+    const cellH = Math.round(cellW * 0.75);
+    const padding = 4;
+    const labelH = 24;
+    const gridW = cols * cellW + (cols - 1) * padding;
+    const gridH = rows * (cellH + labelH) + (rows - 1) * padding;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = gridW;
+    canvas.height = gridH;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, gridW, gridH);
+
+    images.forEach((img, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const x = col * (cellW + padding);
+      const y = row * (cellH + labelH + padding);
+
+      // Fit image in cell preserving aspect ratio
+      const scale = Math.min(cellW / img.width, cellH / img.height);
+      const dW = img.width * scale;
+      const dH = img.height * scale;
+      ctx.drawImage(img, x + (cellW - dW) / 2, y + (cellH - dH) / 2, dW, dH);
+
+      // Label
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(x, y + cellH, cellW, labelH);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${idx + 1}. ${photos[idx].name}`, x + cellW / 2, y + cellH + 17);
+    });
+
+    // Compress grid
+    const MAX_DIM = 1536;
+    if (gridW > MAX_DIM || gridH > MAX_DIM) {
+      const scale = MAX_DIM / Math.max(gridW, gridH);
+      const rW = Math.round(gridW * scale);
+      const rH = Math.round(gridH * scale);
+      const smallCanvas = document.createElement('canvas');
+      smallCanvas.width = rW;
+      smallCanvas.height = rH;
+      const sCtx = smallCanvas.getContext('2d')!;
+      sCtx.drawImage(canvas, 0, 0, rW, rH);
+      return smallCanvas.toDataURL('image/jpeg', 0.82).split(',')[1];
+    }
+    return canvas.toDataURL('image/jpeg', 0.82).split(',')[1];
+  };
 
   // Auto-trigger analysis when annotation data arrives
   useEffect(() => {
@@ -150,7 +225,15 @@ export default function AIPanel({
     if (!hasImages) return;
     setAnalyzing(true);
 
-    const imageBase64 = await captureViewport();
+    // Multi-photo: build grid, single-photo/video/DICOM: capture current view
+    let imageBase64: string | null;
+    if (hasMultiplePhotos) {
+      imageBase64 = await buildPhotoGrid();
+      if (imageBase64) setGridPreview(imageBase64);
+    } else {
+      imageBase64 = await captureViewport();
+    }
+
     const modality = effectiveModality;
     const systemPrompt = getSystemPrompt(modality);
 
@@ -171,6 +254,13 @@ export default function AIPanel({
         clinicalContext: hasContext() ? clinicalContext : undefined,
       });
       userMessage = `Goruntu analizi baslatildi (Video: ${activeVideo.name}${modalityLabel ? ` | ${modalityLabel}` : ''})`;
+    } else if (viewMode === 'photo' && hasMultiplePhotos) {
+      const gridNote = `Bu goruntude ${photos.length} farkli kare/fotograf tek bir grid halinde birlestirilerek gonderilmistir. Her kareyi ayri ayri degerlendir ve kareler arasindaki farkliliklari belirt.\n\n`;
+      prompt = gridNote + organFocus + buildAnalysisPrompt({
+        modality,
+        clinicalContext: hasContext() ? clinicalContext : undefined,
+      });
+      userMessage = `Grid analizi baslatildi (${photos.length} fotograf birlestirildi${modalityLabel ? ` | ${modalityLabel}` : ''})`;
     } else if (viewMode === 'photo' && activePhoto) {
       prompt = organFocus + buildAnalysisPrompt({
         modality,
@@ -628,6 +718,20 @@ export default function AIPanel({
           </div>
         </div>
 
+        {/* Multi-photo badge */}
+        {hasMultiplePhotos && (
+          <div style={{
+            padding: '6px 10px', borderRadius: 6, marginBottom: 6,
+            background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.25)',
+            fontSize: 11, color: '#c084fc', display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            <span style={{ fontSize: 14 }}>🖼️</span>
+            <span>
+              <strong>{photos.length} fotograf</strong> tek grid olarak birlestirilip gonderilecek
+            </span>
+          </div>
+        )}
+
         {/* Analyze button */}
         <button
           className="ai-analyze-btn"
@@ -639,10 +743,43 @@ export default function AIPanel({
               <span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
               Analiz ediliyor...
             </span>
+          ) : hasMultiplePhotos ? (
+            `${photos.length} Fotoyu Grid Olarak Analiz Et`
           ) : (
             'Goruntuyu Analiz Et'
           )}
         </button>
+
+        {/* Grid preview */}
+        {gridPreview && (
+          <div style={{ marginTop: 8, marginBottom: 8 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: 4,
+            }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>
+                Birlestirilen Grid Onizleme
+              </span>
+              <button
+                onClick={() => setGridPreview(null)}
+                style={{
+                  border: 'none', background: 'none', color: 'var(--text-muted)',
+                  cursor: 'pointer', fontSize: 12, padding: '0 4px',
+                }}
+              >
+                &times;
+              </button>
+            </div>
+            <img
+              src={`data:image/jpeg;base64,${gridPreview}`}
+              alt="Grid preview"
+              style={{
+                width: '100%', borderRadius: 6,
+                border: '1px solid var(--border)',
+              }}
+            />
+          </div>
+        )}
 
         {/* Chat messages */}
         <div style={{ marginTop: 16 }}>
