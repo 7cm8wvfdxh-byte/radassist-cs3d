@@ -40,13 +40,104 @@ export default function MobileApp(_props: MobileAppProps) {
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const resultEndRef = useRef<HTMLDivElement>(null);
   const framesRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     resultEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Fullscreen change listener
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    document.addEventListener('webkitfullscreenchange', handler);
+    return () => {
+      document.removeEventListener('fullscreenchange', handler);
+      document.removeEventListener('webkitfullscreenchange', handler);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = videoContainerRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      (el.requestFullscreen || (el as any).webkitRequestFullscreen)?.call(el);
+    }
+  };
+
+  // Build grid image from selected frames — single image, saves tokens
+  const buildFrameGrid = (selectedFrames: CapturedFrame[]): Promise<string> => {
+    return new Promise((resolve) => {
+      const count = selectedFrames.length;
+      if (count === 0) { resolve(''); return; }
+      if (count === 1) { resolve(selectedFrames[0].base64); return; }
+
+      // Calculate grid dimensions
+      const cols = count <= 2 ? 2 : count <= 4 ? 2 : 3;
+      const rows = Math.ceil(count / cols);
+
+      // Load all images
+      const images: HTMLImageElement[] = [];
+      let loaded = 0;
+
+      selectedFrames.forEach((f, i) => {
+        const img = new Image();
+        img.onload = () => {
+          images[i] = img;
+          loaded++;
+          if (loaded === count) {
+            // All loaded — draw grid
+            const cellW = 512;
+            const cellH = Math.round(cellW * 0.75); // 4:3
+            const padding = 4;
+            const labelH = 24;
+            const gridW = cols * cellW + (cols - 1) * padding;
+            const gridH = rows * (cellH + labelH) + (rows - 1) * padding;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = gridW;
+            canvas.height = gridH;
+            const ctx = canvas.getContext('2d')!;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, gridW, gridH);
+
+            selectedFrames.forEach((frame, idx) => {
+              const col = idx % cols;
+              const row = Math.floor(idx / cols);
+              const x = col * (cellW + padding);
+              const y = row * (cellH + labelH + padding);
+
+              // Draw image
+              if (images[idx]) {
+                ctx.drawImage(images[idx], x, y, cellW, cellH);
+              }
+
+              // Draw label
+              ctx.fillStyle = 'rgba(0,0,0,0.7)';
+              ctx.fillRect(x, y + cellH, cellW, labelH);
+              ctx.fillStyle = '#fff';
+              ctx.font = 'bold 14px sans-serif';
+              ctx.textAlign = 'center';
+              ctx.fillText(
+                `Kare ${idx + 1} — ${fmtTime(frame.timestamp)}`,
+                x + cellW / 2,
+                y + cellH + 17
+              );
+            });
+
+            resolve(canvas.toDataURL('image/png').split(',')[1]);
+          }
+        };
+        img.src = `data:image/png;base64,${f.base64}`;
+      });
+    });
+  };
 
   // ─── FILE HANDLING ───
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -232,25 +323,24 @@ export default function MobileApp(_props: MobileAppProps) {
     const sel = frames.filter((f) => f.selected);
     if (sel.length === 0) return;
     setAnalyzing(true); setStep('result');
-    const msgs: { role: string; text: string }[] = [];
-    for (let i = 0; i < sel.length; i++) {
-      const f = sel[i];
-      msgs.push({ role: 'user', text: `📸 Kare ${i + 1}/${sel.length} (${fmtTime(f.timestamp)})` });
-      setMessages([...msgs]);
-      const text = await callAI(
-        `Video kareleri analizinin ${i + 1}/${sel.length}. karesi. ${structureLabel} bölgesine odaklanarak analiz et.`,
-        f.base64
-      );
-      msgs.push({ role: 'ai', text });
-      setMessages([...msgs]);
-    }
-    if (sel.length > 1) {
-      msgs.push({ role: 'user', text: `📊 ${sel.length} kare karşılaştırması` });
-      setMessages([...msgs]);
-      const summary = await callAI('Yukarıdaki tüm kare analizlerini karşılaştır, kısa özet yap.', sel[0].base64);
-      msgs.push({ role: 'ai', text: summary });
-      setMessages([...msgs]);
-    }
+
+    // Build single grid image from all selected frames
+    const gridBase64 = await buildFrameGrid(sel);
+    const timeLabels = sel.map((f, i) => `Kare ${i + 1}: ${fmtTime(f.timestamp)}`).join(', ');
+
+    const prompt = sel.length === 1
+      ? (selectedStructure === 'general_full'
+          ? 'Bu video karesini analiz et. Sistematik rapor hazırla.'
+          : `Bu video karesinde ${structureLabel} bölgesine odaklanarak analiz et.`)
+      : `Bu görüntüde ${sel.length} adet video karesi grid halinde gösterilmektedir (${timeLabels}). ${selectedStructure === 'general_full' ? 'Her bir kareyi' : `${structureLabel} bölgesine odaklanarak her kareyi`} değerlendir. Bulgularını kare numaralarına göre raporla.`;
+
+    setMessages([{
+      role: 'user',
+      text: `📊 ${sel.length} kare analizi (${timeLabels})`,
+    }]);
+
+    const text = await callAI(prompt, gridBase64);
+    setMessages((p) => [...p, { role: 'ai', text }]);
     setAnalyzing(false);
   };
 
@@ -306,31 +396,76 @@ export default function MobileApp(_props: MobileAppProps) {
       {step === 'review' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {/* Media */}
-          <div style={{ width: '100%', aspectRatio: '16/10', maxHeight: '40vh', background: '#000', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+          <div
+            ref={videoContainerRef}
+            style={{
+              width: '100%',
+              ...(isFullscreen
+                ? { height: '100%', maxHeight: 'none' }
+                : { aspectRatio: '16/10', maxHeight: '40vh' }),
+              background: '#000', flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              position: 'relative',
+            }}
+          >
             {mediaType === 'image'
               ? <img src={mediaUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               : <video ref={videoRef} src={mediaUrl} controls playsInline style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             }
+
+            {/* Video overlay buttons — visible in both normal and fullscreen */}
+            {mediaType === 'video' && (
+              <div style={{
+                position: 'absolute', bottom: isFullscreen ? 60 : 8, left: 0, right: 0,
+                display: 'flex', justifyContent: 'center', gap: 8,
+                padding: '0 16px', zIndex: 10,
+              }}>
+                <button onClick={captureFrame} style={{
+                  padding: '10px 20px', borderRadius: 12,
+                  border: 'none', background: 'rgba(6,182,212,0.9)',
+                  backdropFilter: 'blur(8px)',
+                  color: '#fff', fontSize: 14, fontWeight: 700,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  boxShadow: '0 2px 12px rgba(6,182,212,0.4)',
+                }}>
+                  📸 Kare Yakala {frames.length > 0 ? `(${frames.length})` : ''}
+                </button>
+                <button onClick={toggleFullscreen} style={{
+                  padding: '10px 14px', borderRadius: 12,
+                  border: 'none', background: 'rgba(255,255,255,0.15)',
+                  backdropFilter: 'blur(8px)',
+                  color: '#fff', fontSize: 14, cursor: 'pointer',
+                }}>
+                  {isFullscreen ? '⊡' : '⊞'}
+                </button>
+              </div>
+            )}
+
+            {/* Frame count badge in fullscreen */}
+            {mediaType === 'video' && isFullscreen && frames.length > 0 && (
+              <div style={{
+                position: 'absolute', top: 16, right: 16,
+                padding: '6px 14px', borderRadius: 10,
+                background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+                color: '#06b6d4', fontSize: 13, fontWeight: 700, zIndex: 10,
+              }}>
+                {frames.length} kare yakalandı
+              </div>
+            )}
           </div>
 
-          {/* Video frame capture */}
-          {mediaType === 'video' && (
-            <div style={{ padding: '10px 16px', borderBottom: '1px solid #1e1e24', background: '#111114', flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: frames.length ? 8 : 0 }}>
-                <button onClick={captureFrame} style={{ padding: '9px 18px', borderRadius: 10, border: 'none', background: '#06b6d4', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>📸 Kare Yakala</button>
-                {frames.length > 0 && <span style={{ fontSize: 11, color: '#06b6d4', fontWeight: 600 }}>{frames.length} kare</span>}
+          {/* Video frame thumbnails */}
+          {mediaType === 'video' && frames.length > 0 && (
+            <div style={{ padding: '8px 16px', borderBottom: '1px solid #1e1e24', background: '#111114', flexShrink: 0 }}>
+              <div ref={framesRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2 }}>
+                {frames.map((f) => (
+                  <div key={f.id} onClick={() => setFrames((p) => p.map((x) => x.id === f.id ? { ...x, selected: !x.selected } : x))} style={{ position: 'relative', flexShrink: 0, width: 64, borderRadius: 8, overflow: 'hidden', border: `2px solid ${f.selected ? '#3b82f6' : '#1e1e24'}`, opacity: f.selected ? 1 : 0.4 }}>
+                    <img src={f.thumbnailUrl} alt="" style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center', background: 'rgba(0,0,0,0.7)', fontSize: 8, color: '#999', padding: 1 }}>{fmtTime(f.timestamp)}</div>
+                    {f.selected && <div style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>✓</div>}
+                  </div>
+                ))}
               </div>
-              {frames.length > 0 && (
-                <div ref={framesRef} style={{ display: 'flex', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2 }}>
-                  {frames.map((f) => (
-                    <div key={f.id} onClick={() => setFrames((p) => p.map((x) => x.id === f.id ? { ...x, selected: !x.selected } : x))} style={{ position: 'relative', flexShrink: 0, width: 64, borderRadius: 8, overflow: 'hidden', border: `2px solid ${f.selected ? '#3b82f6' : '#1e1e24'}`, opacity: f.selected ? 1 : 0.4 }}>
-                      <img src={f.thumbnailUrl} alt="" style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
-                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center', background: 'rgba(0,0,0,0.7)', fontSize: 8, color: '#999', padding: 1 }}>{fmtTime(f.timestamp)}</div>
-                      {f.selected && <div style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>✓</div>}
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 

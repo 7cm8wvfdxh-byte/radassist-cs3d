@@ -36,6 +36,7 @@ interface PatientInfo {
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(() => {
+    // Check if already authenticated in this session
     if (sessionStorage.getItem('ra_auth') === '1') {
       const savedUser = sessionStorage.getItem('ra_user') || '';
       if (savedUser) setUser(savedUser);
@@ -43,26 +44,6 @@ export default function App() {
     }
     return false;
   });
-  const [authChecked, setAuthChecked] = useState(false);
-
-  // Auto-skip login if no password is set
-  useEffect(() => {
-    if (authenticated) { setAuthChecked(true); return; }
-    fetch('/api/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: '' }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.ok) {
-          sessionStorage.setItem('ra_auth', '1');
-          setAuthenticated(true);
-        }
-        setAuthChecked(true);
-      })
-      .catch(() => setAuthChecked(true));
-  }, []);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [csReady, setCsReady] = useState(false);
@@ -495,9 +476,6 @@ export default function App() {
   const hasVideos = videos.length > 0;
 
   // Password gate
-  if (!authChecked) {
-    return <div style={{width:'100vw',height:'100vh',background:'#0a0a0c',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:24,height:24,border:'2.5px solid #2a2a35',borderTopColor:'#3b82f6',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>;
-  }
   if (!authenticated) {
     return <PasswordGate onAuthenticated={() => setAuthenticated(true)} />;
   }
