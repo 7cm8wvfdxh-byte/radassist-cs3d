@@ -46,6 +46,7 @@ export default function AnnotationOverlay({
   const [brushSize, setBrushSize] = useState(3);
   const [canvasReady, setCanvasReady] = useState(false);
   const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null);
+  const [isMobile] = useState(() => window.innerWidth <= 768);
 
   // Initialize canvas with base image
   useEffect(() => {
@@ -322,37 +323,39 @@ export default function AnnotationOverlay({
       </div>
 
       {/* Main area */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Organ sidebar */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden' }}>
+        {/* Organ sidebar / mobile horizontal strip */}
         <div style={{
-          width: 140, background: 'var(--bg-secondary)',
-          borderRight: '1px solid var(--border)',
-          overflowY: 'auto', padding: 6,
+          ...(isMobile
+            ? { height: 'auto', display: 'flex', flexDirection: 'row', overflowX: 'auto', padding: '4px 6px', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)', gap: 4, alignItems: 'center', flexShrink: 0 }
+            : { width: 140, background: 'var(--bg-secondary)', borderRight: '1px solid var(--border)', overflowY: 'auto', padding: 6 }
+          ),
         }}>
-          <div style={{
+          {!isMobile && <div style={{
             fontSize: 10, fontWeight: 600, color: 'var(--text-muted)',
             textTransform: 'uppercase', letterSpacing: '0.05em',
             padding: '6px 8px',
           }}>
             Bölge / Organ
-          </div>
+          </div>}
           {ORGAN_PRESETS.map((organ) => (
             <button
               key={organ.id}
               onClick={() => setSelectedOrgan(organ.id)}
               style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 6,
-                padding: '7px 8px', borderRadius: 6, border: 'none', cursor: 'pointer',
-                marginBottom: 2,
+                ...(isMobile
+                  ? { display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 20, whiteSpace: 'nowrap' as const, flexShrink: 0 }
+                  : { width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', borderRadius: 6, marginBottom: 2, textAlign: 'left' as const }
+                ),
+                border: 'none', cursor: 'pointer',
                 background: selectedOrgan === organ.id ? organ.color + '25' : 'transparent',
                 color: selectedOrgan === organ.id ? organ.color : 'var(--text-secondary)',
-                fontSize: 12, fontWeight: selectedOrgan === organ.id ? 600 : 400,
+                fontSize: isMobile ? 11 : 12, fontWeight: selectedOrgan === organ.id ? 600 : 400,
                 fontFamily: "'Plus Jakarta Sans', sans-serif",
-                textAlign: 'left',
                 transition: 'all 0.1s ease',
               }}
             >
-              <span style={{ fontSize: 14 }}>{organ.icon}</span>
+              <span style={{ fontSize: isMobile ? 12 : 14 }}>{organ.icon}</span>
               {organ.label}
             </button>
           ))}

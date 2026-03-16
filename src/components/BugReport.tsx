@@ -60,7 +60,7 @@ export default function BugReport({ visible, onClose }: BugReportProps) {
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div style={{
-        width: 380, padding: 24, borderRadius: 14,
+        width: '90vw', maxWidth: 380, padding: 24, borderRadius: 14,
         background: 'var(--bg-secondary)',
         border: '1px solid var(--border)',
       }}>

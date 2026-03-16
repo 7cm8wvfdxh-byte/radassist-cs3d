@@ -565,3 +565,210 @@ html, body, #root {
   z-index: 100;
   white-space: nowrap;
 }
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 768px) {
+  /* Layout: stack vertically, toolbar at bottom */
+  .app-layout {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: 1fr auto;
+  }
+
+  /* Tool rail → horizontal bottom bar */
+  .tool-rail {
+    order: 2;
+    flex-direction: row;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    padding: 4px 6px;
+    gap: 2px;
+    overflow-x: auto;
+    justify-content: center;
+  }
+
+  .tool-rail-logo {
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
+    border-radius: 8px;
+    margin-bottom: 0;
+    margin-right: 4px;
+    flex-shrink: 0;
+  }
+
+  .tool-rail-divider {
+    width: 1px;
+    height: 24px;
+    margin: 0 4px;
+  }
+
+  .tool-btn {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+  }
+
+  .tool-btn.active::before {
+    left: 50%;
+    top: auto;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+  }
+
+  /* Sidebar → overlay drawer from left */
+  .series-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100%;
+    z-index: 50;
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 20px rgba(0,0,0,0.5);
+    animation: slideInLeft 0.2s ease;
+  }
+
+  /* AI Panel → overlay drawer from right */
+  .ai-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 300px;
+    height: 100%;
+    z-index: 50;
+    border-left: 1px solid var(--border);
+    box-shadow: -4px 0 20px rgba(0,0,0,0.5);
+    animation: slideInRight 0.2s ease;
+  }
+
+  /* Backdrop for mobile drawers */
+  .mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 49;
+    animation: fadeIn 0.2s ease;
+  }
+
+  /* Viewport takes full space */
+  .viewport-area {
+    order: 1;
+  }
+
+  .viewport-container {
+    min-height: 0;
+  }
+
+  /* Status bar compact */
+  .status-bar {
+    height: 24px;
+    font-size: 10px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+
+  /* Viewport overlays smaller */
+  .viewport-overlay {
+    font-size: 10px;
+    padding: 8px;
+    line-height: 1.4;
+  }
+
+  /* Drop zone smaller text */
+  .drop-zone h3 {
+    font-size: 14px;
+  }
+
+  .drop-zone p {
+    font-size: 12px;
+  }
+
+  .drop-zone-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+  }
+
+  /* AI panel adjustments */
+  .ai-panel-body {
+    padding: 12px;
+  }
+
+  .ai-chat-input {
+    padding: 8px 12px;
+  }
+
+  .ai-chat-input input {
+    font-size: 14px; /* Prevent zoom on iOS */
+  }
+
+  /* Password gate mobile */
+  .password-gate-card {
+    width: calc(100vw - 40px) !important;
+    max-width: 360px;
+  }
+}
+
+/* Extra small screens (phones < 480px) */
+@media (max-width: 480px) {
+  .series-sidebar {
+    width: 100%;
+  }
+
+  .ai-panel {
+    width: 100%;
+  }
+
+  .tool-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .tool-rail-logo {
+    width: 30px;
+    height: 30px;
+    font-size: 11px;
+  }
+}
+
+/* Animations */
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Touch improvements */
+@media (hover: none) and (pointer: coarse) {
+  .tool-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .series-item {
+    padding: 12px;
+  }
+
+  .browse-btn {
+    padding: 12px 24px;
+    font-size: 14px;
+  }
+
+  .ai-analyze-btn {
+    padding: 12px;
+    font-size: 14px;
+  }
+}
+

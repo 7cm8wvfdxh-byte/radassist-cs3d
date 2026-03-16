@@ -53,7 +53,7 @@ export default function PasswordGate({ onAuthenticated }: PasswordGateProps) {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{
-        width: 360, padding: 32, borderRadius: 16,
+        width: '90vw', maxWidth: 360, padding: 32, borderRadius: 16,
         background: 'var(--bg-secondary)',
         border: '1px solid var(--border)',
         textAlign: 'center',

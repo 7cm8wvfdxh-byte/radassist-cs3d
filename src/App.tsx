@@ -44,6 +44,7 @@ export default function App() {
     return false;
   });
   const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [csReady, setCsReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeTool, setActiveToolState] = useState('WindowLevel');
@@ -55,8 +56,8 @@ export default function App() {
   const [wwwl, setWwwl] = useState({ ww: 0, wl: 0 });
   const [zoom, setZoom] = useState(1);
   const [dragging, setDragging] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [aiOpen, setAiOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 768);
+  const [aiOpen, setAiOpen] = useState(() => window.innerWidth > 768);
   const [sidebarMode, setSidebarMode] = useState<'local' | 'server'>('local');
   const [viewMode, setViewMode] = useState<'dicom' | 'photo' | 'video'>('dicom');
   const [photos, setPhotos] = useState<{ url: string; name: string; file: File }[]>([]);
@@ -70,6 +71,13 @@ export default function App() {
   const renderingEngineRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Mobile detection
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Initialize Cornerstone3D
   useEffect(() => {
@@ -495,6 +503,9 @@ export default function App() {
       />
 
       {/* Sidebar: Local files or Server connection */}
+      {sidebarOpen && isMobile && (
+        <div className="mobile-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
       {sidebarOpen && (
         <div className="series-sidebar">
           {/* Mode tabs */}
@@ -934,6 +945,9 @@ export default function App() {
       </div>
 
       {/* AI Panel */}
+      {aiOpen && isMobile && (
+        <div className="mobile-backdrop" onClick={() => setAiOpen(false)} />
+      )}
       {aiOpen && (
         <AIPanel
           hasImages={hasImages}
