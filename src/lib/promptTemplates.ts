@@ -256,80 +256,72 @@ export const RESPONSE_TYPES: ResponseType[] = [
     label: 'Bulgu',
     icon: '🔍',
     description: 'Sadece bulgular',
-    promptInstruction: `YANITINI SADECE BULGULAR (FINDINGS) OLARAK VER:
-- Sistematik sırayla tüm bulguları listele
-- Her bulgu için: lokalizasyon, boyut (varsa), morfoloji, sinyal/dansite özellikleri
-- Normal yapıları kısaca "doğal" olarak belirt
-- Yorum veya öneri ekleme, sadece objektif bulgular yaz`,
+    promptInstruction: `KISA VE OZ YANITLA. SADECE BULGULARI LISTELE:
+- Patolojik bulgulari madde madde yaz (lokalizasyon, boyut)
+- Normal yapilari tek satirda "diger yapilar dogal" olarak belirt
+- Yorum/oneri EKLEME. Maksimum 10-15 satir.`,
   },
   {
     id: 'report',
     label: 'Rapor',
     icon: '📋',
     description: 'Yapılandırılmış rapor',
-    promptInstruction: `TAM YAPILANDIRILMIŞ RADYOLOJİ RAPORU HAZIRLA:
-## TEKNİK
-## BULGULAR
-## SONUÇ / İZLENİM
-## ÖNERİ
-Her bölümü detaylı doldur. Standart radyoloji rapor formatını kullan.`,
+    promptInstruction: `KISA YAPILANDIRILMIS RAPOR HAZIRLA (maksimum 20 satir):
+## BULGULAR (sadece onemli bulgular, normal yapilari tek satirda ozetle)
+## SONUC (2-3 cumle)
+## ONERI (1-2 madde)
+Gereksiz detay ve tekrar YAPMA. Ozet ve net ol.`,
   },
   {
     id: 'differential',
     label: 'Ayırıcı Tanı',
     icon: '🧬',
     description: 'Olası tanılar listesi',
-    promptInstruction: `AYIRICI TANI LİSTESİ HAZIRLA:
-- Bulgulara dayanarak olası tanıları en muhtemelden en az muhtemele sırala
-- Her tanı için: neden düşünüldüğü, destekleyen bulgular, aleyhte bulgular
-- Varsa "red flag" bulgularını vurgula
-- Her tanı için önerilen doğrulama yöntemi belirt`,
+    promptInstruction: `KISA AYIRICI TANI LISTESI (maksimum 5 tani):
+1. En muhtemel tani — 1 satir neden
+2-5. Diger olasiliklar — birer satir
+Uzun aciklama YAPMA, her tani 1-2 cumle.`,
   },
   {
     id: 'recommendation',
     label: 'Öneri',
     icon: '💡',
     description: 'Klinik öneriler',
-    promptInstruction: `KLİNİK ÖNERİ VE YÖNETİM PLANI HAZIRLA:
-- Mevcut bulguları kısaca özetle
-- Ek tetkik önerileri (hangi modalite, ne zaman, neden)
-- Takip planı (süre, aralık)
-- Acil müdahale gerektiren durum varsa belirt
-- Klinik korelasyon önerileri
-- Gerekiyorsa konsültasyon önerisi`,
+    promptInstruction: `KISA KLINIK ONERI VER (maksimum 10 satir):
+- Temel bulgu ozeti (2 cumle)
+- Ek tetkik onerisi (varsa)
+- Takip plani (sure/aralik)
+Gereksiz aciklama YAPMA, dogrudan oneri yaz.`,
   },
   {
     id: 'scoring',
     label: 'Skorlama',
     icon: '📊',
     description: 'İlgili skorlama sistemi',
-    promptInstruction: `İLGİLİ SKORLAMA SİSTEMİNİ UYGULA:
-- Görüntüdeki bulgulara uygun skorlama sistemini belirle ve uygula
-  (BI-RADS, LI-RADS, Lung-RADS, PI-RADS, TI-RADS, Bosniak, O-RADS, AO vb.)
-- Skorlama kriterlerini madde madde değerlendir
-- Final skoru/kategoriyi ver ve anlamını açıkla
-- Skora göre önerilen yönetim planını belirt
-- Uygun skorlama sistemi yoksa bunu belirt`,
+    promptInstruction: `SKORLAMA UYGULA (kisa ve net):
+- Uygun skorlama sistemi adi
+- Kriterleri kisa degerlendir
+- FINAL SKOR ve anlami (1 cumle)
+- Skora gore oneri (1 cumle)
+Maksimum 10 satir.`,
   },
   {
     id: 'comparison',
     label: 'Karşılaştırma',
     icon: '🔄',
     description: 'Önceki ile karşılaştır',
-    promptInstruction: `KARŞILAŞTIRMALI ANALİZ YAP:
-- Mevcut görüntüdeki bulguları tanımla
-- Eğer önceki görüntü veya bilgi varsa karşılaştır
-- Değişen, yeni ortaya çıkan veya kaybolan bulgular
-- Boyut değişimi (varsa yüzde olarak)
-- Progresyon / regresyon / stabil değerlendirmesi
-- RECIST veya uygun yanıt kriterlerini kullan`,
+    promptInstruction: `KISA KARSILASTIRMALI ANALIZ (maksimum 10 satir):
+- Mevcut ana bulgular (3-5 madde)
+- Degisen/yeni bulgular (varsa)
+- Progresyon/regresyon/stabil (1 cumle)
+Gereksiz tekrar YAPMA.`,
   },
 ];
 
 // Get response type prompt modifier
 export function getResponseTypeInstruction(responseTypeId: string): string {
   const rt = RESPONSE_TYPES.find((r) => r.id === responseTypeId);
-  return rt ? `\n\nYANIT FORMATI TALİMATI:\n${rt.promptInstruction}` : '';
+  return rt ? `\n\nCOK ONEMLI — KISA VE NET YANITLA. Gereksiz tekrar, uzun giris cumlesi ve dolgu cumleleri KULLANMA.\n\nYANIT FORMATI:\n${rt.promptInstruction}` : '';
 }
 
 // Medical disclaimer text

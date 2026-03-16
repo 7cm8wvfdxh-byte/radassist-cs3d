@@ -313,7 +313,8 @@ export default function AIPanel({
     addUserMessage(userMsg);
     setAnalyzing(true);
 
-    const imageBase64 = hasImages ? await captureViewport() : null;
+    // Follow-up questions: do NOT re-send image (saves tokens)
+    // The image was already sent in the initial analysis via history
     const modality = effectiveModality;
     let context: string;
     if (viewMode === 'video' && activeVideo) {
@@ -326,14 +327,14 @@ export default function AIPanel({
       context = 'Henuz goruntu yuklenmemis';
     }
 
-    const prompt = `${context}\n\nKullanici sorusu: ${userMsg}`;
+    const prompt = `${context}\n\nKullanici sorusu: ${userMsg}\n\nOnceki analizde gonderilen goruntu hala gecerli. Goruntuyü tekrar gormene gerek yok, onceki analizindeki bulgulara dayanarak yanit ver.`;
     const history = buildConversationHistory([
       ...messages,
       { role: 'user', content: userMsg, timestamp: new Date() },
     ]);
     const result = await analyzeWithGemini({
       prompt,
-      imageBase64,
+      imageBase64: null, // No image re-send on follow-up
       modality: activeSeries?.modality,
       history,
     });
