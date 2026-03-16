@@ -378,23 +378,36 @@ export default function AIPanel({
           </div>
         )}
 
-        {/* Modality Badge */}
-        {activeSeries?.modality && (
+        {/* Source / Modality Badge — always show when images loaded */}
+        {hasImages && (
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 4,
             padding: '3px 8px',
             borderRadius: 4,
-            background: 'rgba(139,92,246,0.15)',
-            color: '#a78bfa',
+            background: activeSeries?.modality
+              ? 'rgba(139,92,246,0.15)'
+              : viewMode === 'video'
+                ? 'rgba(168,85,247,0.15)'
+                : 'rgba(6,182,212,0.15)',
+            color: activeSeries?.modality
+              ? '#a78bfa'
+              : viewMode === 'video'
+                ? '#c084fc'
+                : '#22d3ee',
             fontSize: 10,
             fontWeight: 600,
             fontFamily: "'JetBrains Mono', monospace",
             marginBottom: 8,
           }}>
-            Modalite: {activeSeries.modality}
-            {activeSeries.description && ` | ${activeSeries.description}`}
+            {activeSeries?.modality
+              ? `Modalite: ${activeSeries.modality}${activeSeries.description ? ` | ${activeSeries.description}` : ''}`
+              : viewMode === 'video' && activeVideo
+                ? `Video: ${activeVideo.name}`
+                : activePhoto
+                  ? `Fotograf: ${activePhoto.name}`
+                  : 'Goruntu yuklendi'}
           </div>
         )}
 
