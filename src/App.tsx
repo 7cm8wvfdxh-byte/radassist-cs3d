@@ -8,12 +8,15 @@ import {
   cornerstone,
   RENDERING_ENGINE_ID,
 } from './lib/initCornerstone';
+import { setUser, logFileUpload, logToolUse } from './lib/logger';
 import ToolRail from './components/ToolRail';
 import SeriesSidebar from './components/SeriesSidebar';
 import ServerPanel from './components/ServerPanel';
 import AnnotationOverlay from './components/AnnotationOverlay';
 import type { AnnotationData } from './components/AnnotationOverlay';
 import AIPanel from './components/AIPanel';
+import PasswordGate from './components/PasswordGate';
+import BugReport from './components/BugReport';
 
 interface SeriesInfo {
   seriesUID: string;
@@ -31,6 +34,16 @@ interface PatientInfo {
 }
 
 export default function App() {
+  const [authenticated, setAuthenticated] = useState(() => {
+    // Check if already authenticated in this session
+    if (sessionStorage.getItem('ra_auth') === '1') {
+      const savedUser = sessionStorage.getItem('ra_user') || '';
+      if (savedUser) setUser(savedUser);
+      return true;
+    }
+    return false;
+  });
+  const [bugReportOpen, setBugReportOpen] = useState(false);
   const [csReady, setCsReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeTool, setActiveToolState] = useState('WindowLevel');
@@ -133,6 +146,7 @@ export default function App() {
           setActiveVideo(videos.length);
           setViewMode('video');
           setLoading(false);
+          logFileUpload('video', videoFiles.length);
 
           if (!patient) {
             setPatient({
@@ -165,8 +179,7 @@ export default function App() {
           setActivePhoto(photos.length); // Jump to first new photo
           setViewMode('photo');
           setLoading(false);
-
-          // Set patient info for photos
+          logFileUpload('photo', regularImages.length);
           if (!patient) {
             setPatient({
               name: 'Görüntü Yüklendi',
@@ -311,6 +324,7 @@ export default function App() {
   const handleToolChange = (tool: string) => {
     setActiveToolState(tool);
     setActiveTool(tool);
+    logToolUse(tool);
   };
 
   // Reset viewport
@@ -449,8 +463,16 @@ export default function App() {
   const hasPhotos = photos.length > 0;
   const hasVideos = videos.length > 0;
 
+  // Password gate
+  if (!authenticated) {
+    return <PasswordGate onAuthenticated={() => setAuthenticated(true)} />;
+  }
+
   return (
     <div className={layoutClass}>
+      {/* Bug Report Modal */}
+      <BugReport visible={bugReportOpen} onClose={() => setBugReportOpen(false)} />
+
       {/* Hidden file input with webkitdirectory for folder upload */}
       <input
         ref={fileInputRef}
@@ -895,6 +917,16 @@ export default function App() {
             </div>
           )}
           <div style={{ flex: 1 }} />
+          <button
+            onClick={() => setBugReportOpen(true)}
+            style={{
+              padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border)',
+              background: 'transparent', color: 'var(--text-muted)', fontSize: 10,
+              cursor: 'pointer', fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            🐛 Hata Bildir
+          </button>
           <div className="status-item">
             <span>RadAssist v2.0</span>
           </div>
