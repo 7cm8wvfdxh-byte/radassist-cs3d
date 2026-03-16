@@ -161,11 +161,17 @@ export function useFileUpload(opts: UseFileUploadOptions) {
     if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
   };
 
-  // Browse button
-  const handleBrowse = (isMobile: boolean) => {
-    if (isMobile && mobileFileInputRef.current) {
+  // Browse button — always use mobileFileInputRef (individual file picker)
+  // fileInputRef has webkitdirectory which only opens folder dialogs
+  const handleBrowse = (_isMobile?: boolean) => {
+    if (mobileFileInputRef.current) {
       mobileFileInputRef.current.click();
-    } else if (fileInputRef.current) {
+    }
+  };
+
+  // Browse folder — uses fileInputRef with webkitdirectory for folder selection
+  const handleBrowseFolder = () => {
+    if (fileInputRef.current) {
       fileInputRef.current.click();
     }
   };
@@ -268,7 +274,7 @@ export function useFileUpload(opts: UseFileUploadOptions) {
     acceptedFiles: ACCEPTED_FILES,
     // Handlers
     handleFiles, handleSeriesChange, handleDragOver, handleDragLeave, handleDrop,
-    handleBrowse, handleFileInput, handleServerLoadSeries,
+    handleBrowse, handleBrowseFolder, handleFileInput, handleServerLoadSeries,
     deletePhoto, deleteVideo, captureFrameAsPhoto, revokeAllUrls,
   };
 }
