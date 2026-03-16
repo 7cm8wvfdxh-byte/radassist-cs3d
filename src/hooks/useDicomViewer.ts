@@ -22,13 +22,6 @@ interface CornerstoneViewport {
   getCamera: () => { parallelScale?: number } | null;
 }
 
-// Cornerstone3D rendering engine type
-interface CornerstoneRenderingEngine {
-  destroy: () => void;
-  enableElement: (config: { viewportId: string; type: unknown; element: HTMLDivElement }) => void;
-  getViewport: (id: string) => CornerstoneViewport | null;
-}
-
 export function useDicomViewer() {
   const [csReady, setCsReady] = useState(false);
   const [activeTool, setActiveToolState] = useState('WindowLevel');
@@ -38,7 +31,8 @@ export function useDicomViewer() {
   const [zoom, setZoom] = useState(1);
 
   const viewportRef = useRef<HTMLDivElement>(null);
-  const renderingEngineRef = useRef<CornerstoneRenderingEngine | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const renderingEngineRef = useRef<any>(null);
   const cleanupListenersRef = useRef<(() => void) | null>(null);
   // Race condition guard — tracks the current display operation
   const displayIdRef = useRef(0);
@@ -110,7 +104,7 @@ export function useDicomViewer() {
       renderingEngineRef.current = null;
     }
 
-    const renderingEngine = new cornerstone.RenderingEngine(RENDERING_ENGINE_ID) as CornerstoneRenderingEngine;
+    const renderingEngine = new cornerstone.RenderingEngine(RENDERING_ENGINE_ID);
     renderingEngineRef.current = renderingEngine;
 
     const viewportId = 'STACK_VIEWPORT';
@@ -126,7 +120,7 @@ export function useDicomViewer() {
       toolGroup.addViewport(viewportId, RENDERING_ENGINE_ID);
     }
 
-    const viewport = renderingEngine.getViewport(viewportId);
+    const viewport = renderingEngine.getViewport(viewportId) as unknown as CornerstoneViewport | null;
     if (!viewport) return;
 
     await viewport.setStack(imageIds, 0);
@@ -186,7 +180,7 @@ export function useDicomViewer() {
   // Reset viewport
   const handleReset = () => {
     if (!renderingEngineRef.current) return;
-    const viewport = renderingEngineRef.current.getViewport('STACK_VIEWPORT');
+    const viewport = renderingEngineRef.current.getViewport('STACK_VIEWPORT') as CornerstoneViewport | null;
     if (viewport) {
       viewport.resetCamera();
       viewport.resetProperties();

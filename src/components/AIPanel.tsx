@@ -30,7 +30,6 @@ export default function AIPanel({
     scrollRef,
     addUserMessage,
     addAssistantMessage,
-    setMessages,
   } = useGeminiChat({ initialMessage: 'RadAssist AI hazir. Goruntu yukleyin ve analiz icin gonderin.' });
 
   const {
