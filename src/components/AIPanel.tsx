@@ -60,21 +60,39 @@ export default function AIPanel({
       const modality = activeSeries?.modality;
       const systemPrompt = getSystemPrompt(modality);
 
-      const prompt = buildAnalysisPrompt({
-        modality,
-        seriesDescription: activeSeries?.description,
-        organLabel: annotationData.organLabel,
-        hasDrawing: annotationData.hasDrawing,
-        clinicalContext: hasContext() ? clinicalContext : undefined,
-      });
+      // Multi-annotation: build a prompt listing all annotated regions
+      const multiAnnotations = annotationData.annotations;
+      let prompt: string;
+      let regionInfo: string;
+
+      if (multiAnnotations && multiAnnotations.length > 1) {
+        // Multiple annotated regions
+        const regionList = multiAnnotations.map((a, i) =>
+          `${i + 1}. ${a.organIcon} ${a.organLabel} (${a.paths.length} cizim, ${a.color} renk)`
+        ).join('\n');
+        prompt = buildAnalysisPrompt({
+          modality,
+          seriesDescription: activeSeries?.description,
+          clinicalContext: hasContext() ? clinicalContext : undefined,
+        });
+        prompt += `\n\nGoruntude ${multiAnnotations.length} farkli bolge isaretlenmistir:\n${regionList}\n\nHer isaretli bolgeyi ayri ayri degerlendir. Her bolge icin bulgularini ve yorumunu yaz. Farkli renklerle isaretlenmis bolgeler farkli organlara/yapilara aittir.`;
+        regionInfo = multiAnnotations.map((a) => a.organLabel).join(', ');
+      } else {
+        prompt = buildAnalysisPrompt({
+          modality,
+          seriesDescription: activeSeries?.description,
+          organLabel: annotationData.organLabel,
+          hasDrawing: annotationData.hasDrawing,
+          clinicalContext: hasContext() ? clinicalContext : undefined,
+        });
+        regionInfo = annotationData.hasDrawing
+          ? `Isaretlenmis bolge (${annotationData.organLabel})`
+          : annotationData.organLabel;
+      }
 
       const scoringHint = getScoringHint(annotationData.organ, modality);
       const responseInstruction = getResponseTypeInstruction(selectedResponseType);
       const fullPrompt = (scoringHint ? `${prompt}\n\n${scoringHint}` : prompt) + responseInstruction;
-
-      const regionInfo = annotationData.hasDrawing
-        ? `Isaretlenmis bolge (${annotationData.organLabel})`
-        : annotationData.organLabel;
 
       addUserMessage(`Hedefli analiz: ${regionInfo}${annotationData.hasDrawing ? ' (cizimli)' : ''}`);
 

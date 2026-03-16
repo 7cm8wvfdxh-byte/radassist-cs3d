@@ -6,6 +6,12 @@ export interface CanvasPath {
   y: number;
 }
 
+/** A group of paths sharing the same color (for multi-annotation) */
+export interface AnnotationLayer {
+  paths: CanvasPath[][];
+  color: string;
+}
+
 export interface DrawCanvasOptions {
   canvas: HTMLCanvasElement;
   baseImage: HTMLImageElement;
@@ -14,6 +20,8 @@ export interface DrawCanvasOptions {
   strokeColor?: string;
   lineWidth?: number;
   fillClosedPath?: boolean;
+  /** Additional annotation layers drawn with their own colors */
+  layers?: AnnotationLayer[];
 }
 
 /** Calculate image scaling and positioning within a canvas */
@@ -35,9 +43,44 @@ export function calcImageFit(
   };
 }
 
+/** Draw a set of paths with a given color */
+function drawPaths(ctx: CanvasRenderingContext2D, pathList: CanvasPath[][], color: string, width: number): void {
+  for (const path of pathList) {
+    if (path.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(path[0].x, path[0].y);
+    for (let i = 1; i < path.length; i++) {
+      ctx.lineTo(path[i].x, path[i].y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = 0.85;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
+/** Fill the last closed path with a transparent overlay */
+function fillLastPath(ctx: CanvasRenderingContext2D, pathList: CanvasPath[][], color: string): void {
+  if (pathList.length === 0) return;
+  const lastPath = pathList[pathList.length - 1];
+  if (lastPath.length > 5) {
+    ctx.beginPath();
+    ctx.moveTo(lastPath[0].x, lastPath[0].y);
+    for (let i = 1; i < lastPath.length; i++) {
+      ctx.lineTo(lastPath[i].x, lastPath[i].y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color + '20';
+    ctx.fill();
+  }
+}
+
 /** Draw base image + annotation paths on canvas */
 export function drawCanvasWithPaths(opts: DrawCanvasOptions): void {
-  const { canvas, baseImage, paths, currentPath = [], strokeColor = '#ef4444', lineWidth = 3, fillClosedPath = true } = opts;
+  const { canvas, baseImage, paths, currentPath = [], strokeColor = '#ef4444', lineWidth = 3, fillClosedPath = true, layers = [] } = opts;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
@@ -53,37 +96,19 @@ export function drawCanvasWithPaths(opts: DrawCanvasOptions): void {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(baseImage, offsetX, offsetY, drawW, drawH);
 
-  // Draw all paths
-  const allPaths = [...paths, ...(currentPath.length > 1 ? [currentPath] : [])];
-  for (const path of allPaths) {
-    if (path.length < 2) continue;
-    ctx.beginPath();
-    ctx.moveTo(path[0].x, path[0].y);
-    for (let i = 1; i < path.length; i++) {
-      ctx.lineTo(path[i].x, path[i].y);
-    }
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = lineWidth;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.globalAlpha = 0.85;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+  // Draw saved annotation layers (from multi-annotation)
+  for (const layer of layers) {
+    drawPaths(ctx, layer.paths, layer.color, lineWidth);
+    if (fillClosedPath) fillLastPath(ctx, layer.paths, layer.color);
   }
+
+  // Draw current active paths
+  const allPaths = [...paths, ...(currentPath.length > 1 ? [currentPath] : [])];
+  drawPaths(ctx, allPaths, strokeColor, lineWidth);
 
   // Fill last closed path with transparent overlay
   if (fillClosedPath && paths.length > 0) {
-    const lastPath = paths[paths.length - 1];
-    if (lastPath.length > 5) {
-      ctx.beginPath();
-      ctx.moveTo(lastPath[0].x, lastPath[0].y);
-      for (let i = 1; i < lastPath.length; i++) {
-        ctx.lineTo(lastPath[i].x, lastPath[i].y);
-      }
-      ctx.closePath();
-      ctx.fillStyle = strokeColor + '20';
-      ctx.fill();
-    }
+    fillLastPath(ctx, paths, strokeColor);
   }
 }
 

@@ -44,6 +44,15 @@ export default function MobileApp(_props: MobileAppProps) {
   const [annotationLabel, setAnnotationLabel] = useState('');
   const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null);
 
+  // Multi-annotation: saved annotation entries
+  interface MobileAnnotation {
+    id: string;
+    label: string;
+    paths: CanvasPath[][];
+    color: string;
+  }
+  const [savedAnnotations, setSavedAnnotations] = useState<MobileAnnotation[]>([]);
+
   // Video frames
   const [frames, setFrames] = useState<CapturedFrame[]>([]);
 
@@ -148,6 +157,10 @@ export default function MobileApp(_props: MobileAppProps) {
     });
   }, [mediaFile, mediaType]);
 
+  // Colors for multiple annotations
+  const ANNOTATION_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4', '#f97316', '#ec4899'];
+  const currentAnnotationColor = ANNOTATION_COLORS[savedAnnotations.length % ANNOTATION_COLORS.length];
+
   // Redraw annotation canvas — using shared drawCanvasWithPaths
   useEffect(() => {
     if (step !== 'annotate' || !baseImage || !canvasRef.current) return;
@@ -156,10 +169,11 @@ export default function MobileApp(_props: MobileAppProps) {
       baseImage,
       paths,
       currentPath,
-      strokeColor: '#ef4444',
+      strokeColor: currentAnnotationColor,
       lineWidth: 3,
+      layers: savedAnnotations.map((a) => ({ paths: a.paths, color: a.color })),
     });
-  }, [baseImage, paths, currentPath, step]);
+  }, [baseImage, paths, currentPath, step, savedAnnotations, currentAnnotationColor]);
 
   const onDown = (e: React.TouchEvent | React.MouseEvent) => {
     if (!canvasRef.current) return;
@@ -179,6 +193,26 @@ export default function MobileApp(_props: MobileAppProps) {
   const getAnnotatedBase64 = (): string | null => {
     if (!canvasRef.current) return null;
     return canvasRef.current.toDataURL('image/png').split(',')[1];
+  };
+
+  // Save current drawing as annotation and continue drawing more
+  const handleSaveAndContinue = () => {
+    if (paths.length === 0) return;
+    const label = annotationLabel.trim() || structureLabel;
+    setSavedAnnotations((prev) => [...prev, {
+      id: `ma_${Date.now()}`,
+      label,
+      paths: [...paths],
+      color: currentAnnotationColor,
+    }]);
+    setPaths([]);
+    setCurrentPath([]);
+    setAnnotationLabel('');
+  };
+
+  // Remove a saved annotation
+  const handleRemoveSavedAnnotation = (id: string) => {
+    setSavedAnnotations((prev) => prev.filter((a) => a.id !== id));
   };
 
   // AI CALL — using shared geminiClient with modality-aware system prompt
@@ -243,10 +277,37 @@ export default function MobileApp(_props: MobileAppProps) {
 
   const handleAnnotatedAnalyze = async () => {
     setAnalyzing(true); setStep('result');
-    const base64 = getAnnotatedBase64();
-    const label = annotationLabel.trim() || structureLabel;
 
-    let prompt = `Bu goruntude kirmizi ile isaretlenmis bolgeyi analiz et. Kullanici bu alanin "${label}" oldugunu belirtiyor. Isaretli bolgedeki bulgulari detayli degerlendir. Patoloji varsa tanimla.`;
+    // Auto-save current paths if not saved yet
+    let allAnnotations = [...savedAnnotations];
+    if (paths.length > 0) {
+      const label = annotationLabel.trim() || structureLabel;
+      allAnnotations.push({
+        id: `ma_${Date.now()}`,
+        label,
+        paths: [...paths],
+        color: currentAnnotationColor,
+      });
+    }
+
+    const base64 = getAnnotatedBase64();
+
+    let prompt: string;
+    let userMsg: string;
+
+    if (allAnnotations.length > 1) {
+      // Multiple annotated regions
+      const regionList = allAnnotations.map((a, i) =>
+        `${i + 1}. "${a.label}" (${a.color} renk ile isaretli)`
+      ).join('\n');
+      prompt = `Bu goruntude ${allAnnotations.length} farkli bolge isaretlenmistir:\n${regionList}\n\nHer isaretli bolgeyi ayri ayri degerlendir. Her bolge icin bulgularini ve yorumunu ayri basliklar altinda yaz.`;
+      userMsg = `${allAnnotations.length} isaretli bolge: ${allAnnotations.map((a) => a.label).join(', ')}`;
+    } else {
+      const label = allAnnotations[0]?.label || annotationLabel.trim() || structureLabel;
+      prompt = `Bu goruntude isaretlenmis bolgeyi analiz et. Kullanici bu alanin "${label}" oldugunu belirtiyor. Isaretli bolgedeki bulgulari detayli degerlendir. Patoloji varsa tanimla.`;
+      userMsg = `Isaretli bolge: "${label}"`;
+    }
+
     if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
@@ -257,7 +318,7 @@ export default function MobileApp(_props: MobileAppProps) {
     prompt += getResponseTypeInstruction(selectedResponseType);
 
     const text = await callAI(prompt, base64);
-    setMessages([{ role: 'user', text: `Isaretli bolge: "${label}"` }, { role: 'ai', text }]);
+    setMessages([{ role: 'user', text: userMsg }, { role: 'ai', text }]);
     setAnalyzing(false);
   };
 
@@ -310,6 +371,7 @@ export default function MobileApp(_props: MobileAppProps) {
     setSelectedCategory(null); setSelectedStructure('general_full');
     setSelectedModality(''); setSelectedResponseType('report');
     setAnnotationLabel(''); setBaseImage(null);
+    setSavedAnnotations([]);
   };
 
   const selCount = frames.filter((f) => f.selected).length;
@@ -510,7 +572,7 @@ export default function MobileApp(_props: MobileAppProps) {
           {/* Action buttons */}
           <div className="mobile-actions">
             <button
-              onClick={() => { setStep('annotate'); setPaths([]); setAnnotationLabel(''); setTimeout(initAnnotationCanvas, 100); }}
+              onClick={() => { setStep('annotate'); setPaths([]); setAnnotationLabel(''); setSavedAnnotations([]); setTimeout(initAnnotationCanvas, 100); }}
               className="mobile-btn-annotate"
             >
               Bolge Isaretle + Etiketle
@@ -542,7 +604,7 @@ export default function MobileApp(_props: MobileAppProps) {
               onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
               onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
             />
-            {paths.length === 0 && (
+            {paths.length === 0 && savedAnnotations.length === 0 && (
               <div className="mobile-canvas-hint">
                 Parmaginizla cizin
               </div>
@@ -553,9 +615,41 @@ export default function MobileApp(_props: MobileAppProps) {
                 <button onClick={() => setPaths([])} className="mobile-float-btn">X</button>
               </>}
             </div>
-            {paths.length > 0 && (
-              <div className="mobile-path-count">
-                {paths.length} cizim
+            {/* Saved annotations badges */}
+            {savedAnnotations.length > 0 && (
+              <div style={{
+                position: 'absolute', top: 8, right: 8,
+                display: 'flex', flexDirection: 'column', gap: 4,
+              }}>
+                {savedAnnotations.map((ann) => (
+                  <div key={ann.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: '3px 8px', borderRadius: 12,
+                    background: 'rgba(0,0,0,0.7)',
+                    border: `1px solid ${ann.color}`,
+                    fontSize: 10, color: ann.color, fontWeight: 600,
+                  }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: '50%',
+                      background: ann.color, flexShrink: 0,
+                    }} />
+                    {ann.label}
+                    <button
+                      onClick={() => handleRemoveSavedAnnotation(ann.id)}
+                      style={{
+                        border: 'none', background: 'none', color: ann.color,
+                        cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1,
+                      }}
+                    >
+                      &times;
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(paths.length > 0 || savedAnnotations.length > 0) && (
+              <div className="mobile-path-count" style={{ background: currentAnnotationColor + 'CC' }}>
+                {savedAnnotations.length > 0 ? `${savedAnnotations.length + (paths.length > 0 ? 1 : 0)} bolge` : `${paths.length} cizim`}
               </div>
             )}
           </div>
@@ -570,13 +664,36 @@ export default function MobileApp(_props: MobileAppProps) {
               placeholder="Orn: sol bobrek alt pol kisti, mezenterik LAP..."
               className="mobile-annotate-input"
             />
-            <button
-              onClick={handleAnnotatedAnalyze}
-              disabled={paths.length === 0}
-              className={`mobile-btn-analyze-annotated ${paths.length > 0 ? 'enabled' : 'disabled'}`}
-            >
-              Isaretli Bolgeyi Analiz Et
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {/* Save & Continue — for adding multiple annotations */}
+              <button
+                onClick={handleSaveAndContinue}
+                disabled={paths.length === 0}
+                style={{
+                  flex: 1,
+                  padding: '10px 12px', borderRadius: 10,
+                  border: `1px solid ${paths.length > 0 ? currentAnnotationColor : 'var(--border)'}`,
+                  background: paths.length > 0 ? currentAnnotationColor + '15' : 'var(--bg-tertiary)',
+                  color: paths.length > 0 ? currentAnnotationColor : 'var(--text-muted)',
+                  fontSize: 13, fontWeight: 600, cursor: paths.length > 0 ? 'pointer' : 'default',
+                  fontFamily: "'Plus Jakarta Sans', sans-serif",
+                  opacity: paths.length > 0 ? 1 : 0.5,
+                }}
+              >
+                + Ekle & Devam Et
+              </button>
+              {/* Analyze all */}
+              <button
+                onClick={handleAnnotatedAnalyze}
+                disabled={paths.length === 0 && savedAnnotations.length === 0}
+                className={`mobile-btn-analyze-annotated ${(paths.length > 0 || savedAnnotations.length > 0) ? 'enabled' : 'disabled'}`}
+                style={{ flex: 1 }}
+              >
+                {(savedAnnotations.length + (paths.length > 0 ? 1 : 0)) > 1
+                  ? `${savedAnnotations.length + (paths.length > 0 ? 1 : 0)} Bolgeyi Analiz Et`
+                  : 'Analiz Et'}
+              </button>
+            </div>
           </div>
         </div>
       )}
