@@ -70,6 +70,7 @@ export default function App() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderingEngineRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mobileFileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Mobile detection
@@ -362,7 +363,9 @@ export default function App() {
 
   // Folder upload support
   const handleBrowse = () => {
-    if (fileInputRef.current) {
+    if (isMobile && mobileFileInputRef.current) {
+      mobileFileInputRef.current.click();
+    } else if (fileInputRef.current) {
       fileInputRef.current.click();
     }
   };
@@ -481,7 +484,7 @@ export default function App() {
       {/* Bug Report Modal */}
       <BugReport visible={bugReportOpen} onClose={() => setBugReportOpen(false)} />
 
-      {/* Hidden file input with webkitdirectory for folder upload */}
+      {/* Hidden file input with webkitdirectory for folder upload (desktop) */}
       <input
         ref={fileInputRef}
         type="file"
@@ -490,6 +493,15 @@ export default function App() {
         style={{ display: 'none' }}
         onChange={handleFileInput}
         {...({ webkitdirectory: '', directory: '' } as any)}
+      />
+      {/* Mobile file input — no webkitdirectory so individual files can be picked */}
+      <input
+        ref={mobileFileInputRef}
+        type="file"
+        multiple
+        accept=".dcm,.DCM,application/dicom,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff,.tif,.mp4,.mov,.webm,.avi,.mkv,.m4v,image/*,video/*"
+        style={{ display: 'none' }}
+        onChange={handleFileInput}
       />
 
       {/* Tool Rail */}
