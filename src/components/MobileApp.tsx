@@ -193,10 +193,20 @@ export default function MobileApp(_props: MobileAppProps) {
     setAnalyzing(true); setStep('result');
     const base64 = await getBase64();
 
-    let prompt = 'Bu goruntuyu genel olarak analiz et. Tum yapilari degerlendir, sistematik rapor hazirla.';
+    // If a category is selected (e.g. "Karaciger") but no specific structure,
+    // include the category in the prompt for focused analysis
+    let prompt: string;
+    if (selectedCategory && selectedCategory.id !== 'general') {
+      prompt = `Bu goruntude "${selectedCategory.label}" bolgesine odaklanarak analiz et. Bu alana ozgu bulgulari detayli degerlendir, sistematik rapor hazirla.`;
+    } else {
+      prompt = 'Bu goruntuyu genel olarak analiz et. Tum yapilari degerlendir, sistematik rapor hazirla.';
+    }
     if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
+
+    const scoringHint = selectedCategory ? getScoringHint(selectedCategory.id) : null;
+    if (scoringHint) prompt += `\n\n${scoringHint}`;
 
     const text = await callAI(prompt, base64);
     setMessages([{ role: 'ai', text }]);
@@ -451,7 +461,11 @@ export default function MobileApp(_props: MobileAppProps) {
               onClick={selectedStructure === 'general_full' ? handleGeneralAnalyze : handleStructureAnalyze}
               className="mobile-btn-analyze"
             >
-              {selectedStructure === 'general_full' ? 'Genel Analiz' : `${structureLabel} Analiz Et`}
+              {selectedStructure !== 'general_full'
+                ? `${structureLabel} Analiz Et`
+                : selectedCategory && selectedCategory.id !== 'general'
+                  ? `${selectedCategory.label} Analiz Et`
+                  : 'Genel Analiz'}
             </button>
             {mediaType === 'video' && selCount > 0 && (
               <button onClick={handleMultiFrameAnalyze} className="mobile-btn-multiframe">
