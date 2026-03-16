@@ -2,21 +2,24 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { getUser } from '../lib/logger';
 import { ORGAN_TREE, findStructure } from '../lib/organTree';
 import type { OrganCategory } from '../lib/organTree';
+import type { CapturedFrame } from '../types';
 import {
   getSystemPrompt,
   getScoringHint,
   MEDICAL_DISCLAIMER,
-  type ClinicalContext,
   buildClinicalContextString,
 } from '../lib/promptTemplates';
 import { renderMarkdown } from '../lib/markdownRenderer';
+import {
+  captureVideoFrame,
+  fileToBase64,
+  buildFrameGrid,
+  formatTime,
+} from '../lib/mediaCapture';
+import { analyzeWithGemini, buildConversationHistorySimple } from '../lib/geminiClient';
+import { useClinicalContext } from '../hooks/useClinicalContext';
 
 interface MobileAppProps { onSwitchToDesktop: () => void; }
-
-interface CapturedFrame {
-  id: string; thumbnailUrl: string; base64: string;
-  timestamp: number; selected: boolean;
-}
 
 type Step = 'capture' | 'review' | 'annotate' | 'result';
 
@@ -45,11 +48,8 @@ export default function MobileApp(_props: MobileAppProps) {
   const [chatInput, setChatInput] = useState('');
   const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
 
-  // Clinical context
-  const [showContext, setShowContext] = useState(false);
-  const [clinicalContext, setClinicalContext] = useState<ClinicalContext>({
-    age: '', gender: '', complaint: '', history: '', clinicalQuestion: '',
-  });
+  // Clinical context — shared hook
+  const { showContext, setShowContext, clinicalContext, setClinicalContext, hasContext } = useClinicalContext();
 
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -84,64 +84,34 @@ export default function MobileApp(_props: MobileAppProps) {
     }
   };
 
-  const hasClinicalContext = () => {
-    return !!(clinicalContext.age || clinicalContext.gender || clinicalContext.complaint || clinicalContext.history || clinicalContext.clinicalQuestion);
+  // BASE64 HELPERS — using shared utilities
+  const getBase64 = async (): Promise<string | null> => {
+    try {
+      if (mediaType === 'video' && videoRef.current) {
+        return captureVideoFrame(videoRef.current);
+      }
+      if (mediaFile) return fileToBase64(mediaFile);
+      return null;
+    } catch { return null; }
   };
 
-  const buildFrameGrid = (selectedFrames: CapturedFrame[]): Promise<string> => {
-    return new Promise((resolve) => {
-      const count = selectedFrames.length;
-      if (count === 0) { resolve(''); return; }
-      if (count === 1) { resolve(selectedFrames[0].base64); return; }
-
-      const cols = count <= 2 ? 2 : count <= 4 ? 2 : 3;
-      const rows = Math.ceil(count / cols);
-
-      const images: HTMLImageElement[] = [];
-      let loaded = 0;
-
-      selectedFrames.forEach((f, i) => {
-        const img = new Image();
-        img.onload = () => {
-          images[i] = img;
-          loaded++;
-          if (loaded === count) {
-            const cellW = 512;
-            const cellH = Math.round(cellW * 0.75);
-            const padding = 4;
-            const labelH = 24;
-            const gridW = cols * cellW + (cols - 1) * padding;
-            const gridH = rows * (cellH + labelH) + (rows - 1) * padding;
-
-            const canvas = document.createElement('canvas');
-            canvas.width = gridW;
-            canvas.height = gridH;
-            const ctx = canvas.getContext('2d')!;
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, gridW, gridH);
-
-            selectedFrames.forEach((frame, idx) => {
-              const col = idx % cols;
-              const row = Math.floor(idx / cols);
-              const x = col * (cellW + padding);
-              const y = row * (cellH + labelH + padding);
-
-              if (images[idx]) ctx.drawImage(images[idx], x, y, cellW, cellH);
-
-              ctx.fillStyle = 'rgba(0,0,0,0.7)';
-              ctx.fillRect(x, y + cellH, cellW, labelH);
-              ctx.fillStyle = '#fff';
-              ctx.font = 'bold 14px sans-serif';
-              ctx.textAlign = 'center';
-              ctx.fillText(`Kare ${idx + 1} - ${fmtTime(frame.timestamp)}`, x + cellW / 2, y + cellH + 17);
-            });
-
-            resolve(canvas.toDataURL('image/png').split(',')[1]);
-          }
-        };
-        img.src = `data:image/png;base64,${f.base64}`;
-      });
-    });
+  // VIDEO FRAME CAPTURE — using shared captureVideoFrame
+  const captureFrame = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    const base64 = captureVideoFrame(v);
+    if (!base64) return;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth || 640;
+    c.height = v.videoHeight || 480;
+    c.getContext('2d')!.drawImage(v, 0, 0);
+    setFrames((prev) => [...prev, {
+      id: `f_${Date.now()}`,
+      thumbnailUrl: c.toDataURL('image/jpeg', 0.6),
+      base64,
+      timestamp: v.currentTime, selected: true,
+    }]);
+    setTimeout(() => framesRef.current?.scrollTo({ left: 99999, behavior: 'smooth' }), 100);
   };
 
   // FILE HANDLING
@@ -158,45 +128,6 @@ export default function MobileApp(_props: MobileAppProps) {
     setPaths([]);
     setAnnotationLabel('');
     e.target.value = '';
-  };
-
-  // BASE64 HELPERS
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res((r.result as string).split(',')[1]);
-      r.onerror = rej;
-      r.readAsDataURL(file);
-    });
-
-  const getBase64 = async (): Promise<string | null> => {
-    try {
-      if (mediaType === 'video' && videoRef.current) {
-        const v = videoRef.current;
-        const c = document.createElement('canvas');
-        c.width = v.videoWidth || 640; c.height = v.videoHeight || 480;
-        c.getContext('2d')!.drawImage(v, 0, 0);
-        return c.toDataURL('image/png').split(',')[1];
-      }
-      if (mediaFile) return fileToBase64(mediaFile);
-      return null;
-    } catch { return null; }
-  };
-
-  // VIDEO FRAME CAPTURE
-  const captureFrame = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    const c = document.createElement('canvas');
-    c.width = v.videoWidth || 640; c.height = v.videoHeight || 480;
-    c.getContext('2d')!.drawImage(v, 0, 0);
-    setFrames((prev) => [...prev, {
-      id: `f_${Date.now()}`,
-      thumbnailUrl: c.toDataURL('image/jpeg', 0.6),
-      base64: c.toDataURL('image/png').split(',')[1],
-      timestamp: v.currentTime, selected: true,
-    }]);
-    setTimeout(() => framesRef.current?.scrollTo({ left: 99999, behavior: 'smooth' }), 100);
   };
 
   // ANNOTATION CANVAS
@@ -277,41 +208,16 @@ export default function MobileApp(_props: MobileAppProps) {
     return canvasRef.current.toDataURL('image/png').split(',')[1];
   };
 
-  // Build conversation history for multi-turn
-  const buildConversationHistory = () => {
-    const history: { role: string; parts: { text: string }[] }[] = [];
-    for (const msg of messages) {
-      history.push({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.text }],
-      });
-    }
-    return history;
-  };
-
-  // AI CALL
+  // AI CALL — using shared geminiClient
   const callAI = async (prompt: string, base64: string | null): Promise<string> => {
-    try {
-      const systemPrompt = `Sen deneyimli bir radyolog asistanissin. Turkce yanit ver. Asagidaki yapida sistematik rapor hazirla:
-## TEKNIK
-## BULGULAR
-## SONUC / IZLENIM
-## ONERI
-Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
-
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          imageBase64: base64,
-          systemPrompt,
-          history: buildConversationHistory(),
-        }),
-      });
-      const data = await res.json();
-      return data.text || data.error || 'Yanit alinamadi.';
-    } catch (err) { return `Hata: ${(err as Error).message}`; }
+    const systemPrompt = getSystemPrompt();
+    const history = buildConversationHistorySimple(messages);
+    return analyzeWithGemini({
+      prompt,
+      imageBase64: base64,
+      systemPrompt,
+      history,
+    });
   };
 
   // ANALYZE ACTIONS
@@ -322,7 +228,7 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
     const base64 = await getBase64();
 
     let prompt = 'Bu goruntuyu genel olarak analiz et. Tum yapilari degerlendir, sistematik rapor hazirla.';
-    if (hasClinicalContext()) {
+    if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
@@ -336,11 +242,10 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
     const base64 = await getBase64();
 
     let prompt = `Bu goruntude "${structureLabel}" yapisina/bolgesine odaklanarak analiz et. Bu alana ozgu bulgulari detayli degerlendir.`;
-    if (hasClinicalContext()) {
+    if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
-    // Add scoring hint if applicable
     const scoringHint = getScoringHint(selectedStructure);
     if (scoringHint) prompt += `\n\n${scoringHint}`;
 
@@ -355,7 +260,7 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
     const label = annotationLabel.trim() || structureLabel;
 
     let prompt = `Bu goruntude kirmizi ile isaretlenmis bolgeyi analiz et. Kullanici bu alanin "${label}" oldugunu belirtiyor. Isaretli bolgedeki bulgulari detayli degerlendir. Patoloji varsa tanimla.`;
-    if (hasClinicalContext()) {
+    if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
@@ -372,8 +277,8 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
     if (sel.length === 0) return;
     setAnalyzing(true); setStep('result');
 
-    const gridBase64 = await buildFrameGrid(sel);
-    const timeLabels = sel.map((f, i) => `Kare ${i + 1}: ${fmtTime(f.timestamp)}`).join(', ');
+    const gridBase64 = await buildFrameGrid(sel, formatTime);
+    const timeLabels = sel.map((f, i) => `Kare ${i + 1}: ${formatTime(f.timestamp)}`).join(', ');
 
     let prompt = sel.length === 1
       ? (selectedStructure === 'general_full'
@@ -381,7 +286,7 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
           : `Bu video karesinde ${structureLabel} bolgesine odaklanarak analiz et.`)
       : `Bu goruntude ${sel.length} adet video karesi grid halinde gosterilmektedir (${timeLabels}). ${selectedStructure === 'general_full' ? 'Her bir kareyi' : `${structureLabel} bolgesine odaklanarak her kareyi`} degerlendir. Bulgularini kare numaralarina gore raporla.`;
 
-    if (hasClinicalContext()) {
+    if (hasContext()) {
       prompt += buildClinicalContextString(clinicalContext);
     }
 
@@ -415,7 +320,6 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
     setAnnotationLabel(''); setBaseImage(null);
   };
 
-  const fmtTime = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
   const selCount = frames.filter((f) => f.selected).length;
 
   // RENDER
@@ -514,7 +418,7 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
                 {frames.map((f) => (
                   <div key={f.id} onClick={() => setFrames((p) => p.map((x) => x.id === f.id ? { ...x, selected: !x.selected } : x))} style={{ position: 'relative', flexShrink: 0, width: 64, borderRadius: 8, overflow: 'hidden', border: `2px solid ${f.selected ? '#3b82f6' : '#1e1e24'}`, opacity: f.selected ? 1 : 0.4 }}>
                     <img src={f.thumbnailUrl} alt="" style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
-                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center', background: 'rgba(0,0,0,0.7)', fontSize: 8, color: '#999', padding: 1 }}>{fmtTime(f.timestamp)}</div>
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, textAlign: 'center', background: 'rgba(0,0,0,0.7)', fontSize: 8, color: '#999', padding: 1 }}>{formatTime(f.timestamp)}</div>
                     {f.selected && <div style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: 8, background: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 }}>+</div>}
                   </div>
                 ))}
@@ -528,14 +432,14 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
               onClick={() => setShowContext(!showContext)}
               style={{
                 width: '100%', padding: '8px 12px', borderRadius: 10,
-                border: `1px solid ${hasClinicalContext() ? 'rgba(34,197,94,0.3)' : '#1e1e24'}`,
-                background: hasClinicalContext() ? 'rgba(34,197,94,0.08)' : '#111114',
-                color: hasClinicalContext() ? '#22c55e' : '#9898a8',
+                border: `1px solid ${hasContext() ? 'rgba(34,197,94,0.3)' : '#1e1e24'}`,
+                background: hasContext() ? 'rgba(34,197,94,0.08)' : '#111114',
+                color: hasContext() ? '#22c55e' : '#9898a8',
                 fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               }}
             >
-              <span>{hasClinicalContext() ? 'Klinik Bilgi (aktif)' : 'Klinik Bilgi Ekle (opsiyonel)'}</span>
+              <span>{hasContext() ? 'Klinik Bilgi (aktif)' : 'Klinik Bilgi Ekle (opsiyonel)'}</span>
               <span style={{ fontSize: 10 }}>{showContext ? 'v' : '>'}</span>
             </button>
 
@@ -548,7 +452,7 @@ Tibbi olmayan goruntuler icin: Icerigi analiz et ve acikla.`;
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={mobileLabel}>Cinsiyet</div>
-                    <select value={clinicalContext.gender} onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as ClinicalContext['gender'] })} style={mobileInput}>
+                    <select value={clinicalContext.gender} onChange={(e) => setClinicalContext({ ...clinicalContext, gender: e.target.value as 'male' | 'female' | '' })} style={mobileInput}>
                       <option value="">-</option>
                       <option value="male">Erkek</option>
                       <option value="female">Kadin</option>

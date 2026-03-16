@@ -1,35 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-
-// Common radiology organ/region presets
-const ORGAN_PRESETS = [
-  { id: 'general', label: 'Genel Analiz', icon: '🔍', color: '#3b82f6' },
-  { id: 'brain', label: 'Beyin', icon: '🧠', color: '#a855f7' },
-  { id: 'spine', label: 'Omurga', icon: '🦴', color: '#f59e0b' },
-  { id: 'chest', label: 'Göğüs', icon: '🫁', color: '#22c55e' },
-  { id: 'heart', label: 'Kalp', icon: '❤️', color: '#ef4444' },
-  { id: 'abdomen', label: 'Abdomen', icon: '🫃', color: '#06b6d4' },
-  { id: 'liver', label: 'Karaciğer', icon: '🟤', color: '#92400e' },
-  { id: 'kidney', label: 'Böbrek', icon: '🫘', color: '#dc2626' },
-  { id: 'pelvis', label: 'Pelvis', icon: '🦴', color: '#7c3aed' },
-  { id: 'extremity', label: 'Ekstremite', icon: '🦵', color: '#0891b2' },
-  { id: 'neck', label: 'Boyun', icon: '🔵', color: '#2563eb' },
-  { id: 'eye', label: 'Göz', icon: '👁️', color: '#4f46e5' },
-];
-
-export interface AnnotationData {
-  organ: string;
-  organLabel: string;
-  drawingDataUrl: string | null; // cropped region as base64
-  fullImageWithAnnotation: string | null; // full image with drawing overlay
-  hasDrawing: boolean;
-}
-
-interface AnnotationOverlayProps {
-  visible: boolean;
-  onAnalyze: (data: AnnotationData) => void;
-  onClose: () => void;
-  captureBase: () => Promise<string | null>; // base image capture function
-}
+import { ORGAN_PRESETS } from '../lib/organTree';
+import type { AnnotationData, AnnotationOverlayProps } from '../types';
 
 export default function AnnotationOverlay({
   visible,

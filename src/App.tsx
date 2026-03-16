@@ -9,30 +9,16 @@ import {
   RENDERING_ENGINE_ID,
 } from './lib/initCornerstone';
 import { setUser, logFileUpload, logToolUse } from './lib/logger';
+import { captureCurrentView } from './lib/mediaCapture';
+import type { SeriesInfo, PatientInfo, AnnotationData, ViewMode, MediaFile } from './types';
 import ToolRail from './components/ToolRail';
 import SeriesSidebar from './components/SeriesSidebar';
 import ServerPanel from './components/ServerPanel';
 import AnnotationOverlay from './components/AnnotationOverlay';
-import type { AnnotationData } from './components/AnnotationOverlay';
 import AIPanel from './components/AIPanel';
 import PasswordGate from './components/PasswordGate';
 import BugReport from './components/BugReport';
 import MobileApp from './components/MobileApp';
-
-interface SeriesInfo {
-  seriesUID: string;
-  description: string;
-  modality: string;
-  imageIds: string[];
-  instanceCount: number;
-}
-
-interface PatientInfo {
-  name: string;
-  id: string;
-  studyDate: string;
-  studyDescription: string;
-}
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(() => {
@@ -60,10 +46,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 768);
   const [aiOpen, setAiOpen] = useState(() => window.innerWidth > 768);
   const [sidebarMode, setSidebarMode] = useState<'local' | 'server'>('local');
-  const [viewMode, setViewMode] = useState<'dicom' | 'photo' | 'video'>('dicom');
-  const [photos, setPhotos] = useState<{ url: string; name: string; file: File }[]>([]);
+  const [viewMode, setViewMode] = useState<ViewMode>('dicom');
+  const [photos, setPhotos] = useState<MediaFile[]>([]);
   const [activePhoto, setActivePhoto] = useState(0);
-  const [videos, setVideos] = useState<{ url: string; name: string; file: File }[]>([]);
+  const [videos, setVideos] = useState<MediaFile[]>([]);
   const [activeVideo, setActiveVideo] = useState(0);
   const [annotationOpen, setAnnotationOpen] = useState(false);
   const [lastAnnotation, setLastAnnotation] = useState<AnnotationData | null>(null);
@@ -257,9 +243,18 @@ export default function App() {
     [csReady, groupBySeries]
   );
 
+  // Store event listener cleanup function
+  const cleanupListenersRef = useRef<(() => void) | null>(null);
+
   // Display a series in the viewport
   const displaySeries = async (imageIds: string[]) => {
     if (!viewportRef.current) return;
+
+    // Clean up previous event listeners (fix memory leak)
+    if (cleanupListenersRef.current) {
+      cleanupListenersRef.current();
+      cleanupListenersRef.current = null;
+    }
 
     // Destroy existing rendering engine
     if (renderingEngineRef.current) {
@@ -288,35 +283,42 @@ export default function App() {
     await viewport.setStack(imageIds, 0);
     viewport.render();
 
-    // Listen for events
+    // Listen for events — store references for cleanup
     const element = viewportRef.current;
 
-    element.addEventListener(cornerstone.Enums.Events.STACK_NEW_IMAGE, ((
-      evt: any
-    ) => {
+    const onStackNewImage = ((evt: any) => {
       const { imageIdIndex } = evt.detail;
       setImageIndex(imageIdIndex);
-    }) as EventListener);
+    }) as EventListener;
 
-    element.addEventListener(cornerstone.Enums.Events.VOI_MODIFIED, ((
-      evt: any
-    ) => {
+    const onVoiModified = ((evt: any) => {
       const { range } = evt.detail;
       if (range) {
         const ww = Math.round(range.upper - range.lower);
         const wl = Math.round((range.upper + range.lower) / 2);
         setWwwl({ ww, wl });
       }
-    }) as EventListener);
+    }) as EventListener;
 
-    element.addEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, (() => {
+    const onCameraModified = (() => {
       try {
         const cam = viewport.getCamera();
         if (cam?.parallelScale) {
           setZoom(1);
         }
       } catch {}
-    }) as EventListener);
+    }) as EventListener;
+
+    element.addEventListener(cornerstone.Enums.Events.STACK_NEW_IMAGE, onStackNewImage);
+    element.addEventListener(cornerstone.Enums.Events.VOI_MODIFIED, onVoiModified);
+    element.addEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
+
+    // Store cleanup function
+    cleanupListenersRef.current = () => {
+      element.removeEventListener(cornerstone.Enums.Events.STACK_NEW_IMAGE, onStackNewImage);
+      element.removeEventListener(cornerstone.Enums.Events.VOI_MODIFIED, onVoiModified);
+      element.removeEventListener(cornerstone.Enums.Events.CAMERA_MODIFIED, onCameraModified);
+    };
   };
 
   // Series change
@@ -425,35 +427,11 @@ export default function App() {
 
   // Capture current viewport/photo/video frame as base64 for annotation
   const captureBase = useCallback(async (): Promise<string | null> => {
-    try {
-      if (viewMode === 'video' && videoRef.current) {
-        const video = videoRef.current;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-        ctx.drawImage(video, 0, 0);
-        return canvas.toDataURL('image/png').split(',')[1];
-      }
-      if (viewMode === 'photo' && photos[activePhoto]?.file) {
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const result = reader.result as string;
-            resolve(result.split(',')[1]);
-          };
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(photos[activePhoto].file);
-        });
-      }
-      // DICOM canvas
-      const canvas = document.querySelector('.viewport-element canvas') as HTMLCanvasElement;
-      if (!canvas) return null;
-      return canvas.toDataURL('image/png').split(',')[1];
-    } catch {
-      return null;
-    }
+    return captureCurrentView({
+      viewMode,
+      videoRef: videoRef.current,
+      activePhoto: photos[activePhoto] || null,
+    });
   }, [viewMode, photos, activePhoto]);
 
   // Handle annotation analysis result
