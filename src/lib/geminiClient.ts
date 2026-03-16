@@ -41,7 +41,7 @@ export async function analyzeWithGemini(opts: {
   history?: GeminiTurn[];
 }): Promise<string> {
   try {
-    const result = await apiFetch<{ text?: string; error?: string }>('/api/analyze', {
+    const result = await apiFetch<{ text?: string; error?: string; model?: string }>('/api/analyze', {
       body: {
         prompt: opts.prompt,
         imageBase64: opts.imageBase64,
@@ -50,7 +50,13 @@ export async function analyzeWithGemini(opts: {
       },
     });
 
-    if (result.data.text) return result.data.text;
+    if (result.data.text) {
+      // Show which model was used if it's a fallback
+      const modelNote = result.data.model && result.data.model !== 'gemini-2.5-flash'
+        ? `\n\n---\n*Model: ${result.data.model} (2.5-flash limiti asildi, otomatik gecis)*`
+        : '';
+      return result.data.text + modelNote;
+    }
     if (result.data.error) return `Hata: ${result.data.error}`;
     return 'Yanit alinamadi.';
   } catch (err) {
